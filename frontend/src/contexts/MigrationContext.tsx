@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { api, type SnowflakeCredentials, type MigrationStatusResponse } from '@/lib/api';
+import { api, type SnowflakeCredentials, type MigrationStatusResponse, type ConnectionProfile } from '@/lib/api';
 
 interface MigrationContextType {
   tables: string[];
@@ -10,6 +10,9 @@ interface MigrationContextType {
   creds: SnowflakeCredentials;
   status: MigrationStatusResponse | null;
   history: MigrationStatusResponse[];
+  profiles: ConnectionProfile[];
+  activeProfileId: string;
+  activeProfile: ConnectionProfile | null;
   setAuthMode: (mode: 'env' | 'custom') => void;
   setCreds: React.Dispatch<React.SetStateAction<SnowflakeCredentials>>;
   setSelectedTables: React.Dispatch<React.SetStateAction<string[]>>;
@@ -18,6 +21,10 @@ interface MigrationContextType {
   clearSelectedTables: () => void;
   fetchTables: () => Promise<void>;
   fetchHistory: () => Promise<void>;
+  refreshProfiles: () => Promise<void>;
+  selectProfile: (profileId: string) => void;
+  saveProfile: (profile: Partial<ConnectionProfile>) => Promise<ConnectionProfile>;
+  deleteProfile: (profileId: string) => Promise<void>;
 }
 
 const defaultCreds: SnowflakeCredentials = {
@@ -41,6 +48,58 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
   const [creds, setCreds] = useState<SnowflakeCredentials>(defaultCreds);
   const [status, setStatus] = useState<MigrationStatusResponse | null>(null);
   const [history, setHistory] = useState<MigrationStatusResponse[]>([]);
+  const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<string>('default_env');
+
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || null;
+
+  const refreshProfiles = async () => {
+    try {
+      const list = await api.getProfiles();
+      setProfiles(list);
+      if (list.length > 0 && !list.some((p) => p.id === activeProfileId)) {
+        setActiveProfileId(list[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to load profiles', err);
+    }
+  };
+
+  const selectProfile = (profileId: string) => {
+    setActiveProfileId(profileId);
+    const target = profiles.find((p) => p.id === profileId);
+    if (target) {
+      if (target.id === 'default_env') {
+        setAuthMode('env');
+      } else {
+        setAuthMode('custom');
+        setCreds({
+          snowflake_user: target.snowflake_user,
+          snowflake_password: target.snowflake_password || '',
+          snowflake_account: target.snowflake_account,
+          snowflake_warehouse: target.snowflake_warehouse,
+          snowflake_database: target.snowflake_database,
+          snowflake_schema: target.snowflake_schema,
+          snowflake_role: target.snowflake_role || '',
+        });
+      }
+    }
+  };
+
+  const saveProfile = async (profileData: Partial<ConnectionProfile>) => {
+    const saved = await api.saveProfile(profileData);
+    await refreshProfiles();
+    selectProfile(saved.id);
+    return saved;
+  };
+
+  const deleteProfile = async (profileId: string) => {
+    await api.deleteProfile(profileId);
+    await refreshProfiles();
+    if (activeProfileId === profileId) {
+      selectProfile('default_env');
+    }
+  };
 
   const fetchTables = async () => {
     setLoadingTables(true);
@@ -81,11 +140,16 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
     setSelectedTables([]);
   };
 
-  // Initial table fetch on mount
+  // Initial load
+  useEffect(() => {
+    refreshProfiles();
+    fetchHistory();
+  }, []);
+
+  // Fetch tables when active connection changes
   useEffect(() => {
     fetchTables();
-    fetchHistory();
-  }, [authMode]);
+  }, [authMode, creds.snowflake_account, creds.snowflake_database, creds.snowflake_schema]);
 
   // Status Polling when migration is RUNNING
   useEffect(() => {
@@ -118,6 +182,9 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
         creds,
         status,
         history,
+        profiles,
+        activeProfileId,
+        activeProfile,
         setAuthMode,
         setCreds,
         setSelectedTables,
@@ -126,6 +193,10 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
         clearSelectedTables,
         fetchTables,
         fetchHistory,
+        refreshProfiles,
+        selectProfile,
+        saveProfile,
+        deleteProfile,
       }}
     >
       {children}

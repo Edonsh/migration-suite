@@ -82,6 +82,21 @@ export interface ValidationReport {
   tables: ValidationTableResult[];
 }
 
+export interface ConnectionProfile {
+  id: string;
+  name: string;
+  snowflake_user: string;
+  snowflake_password?: string;
+  snowflake_account: string;
+  snowflake_warehouse: string;
+  snowflake_database: string;
+  snowflake_schema: string;
+  snowflake_role?: string;
+  is_default?: boolean;
+  has_password?: boolean;
+  created_at?: string;
+}
+
 export interface ConnectionsStatus {
   snowflake: {
     user: string;
@@ -202,4 +217,36 @@ export const api = {
     });
     return handleResponse<any>(res);
   },
+
+  // Saved Connection Profiles
+  getProfiles: async (): Promise<ConnectionProfile[]> => {
+    const res = await fetch('/api/connections/profiles');
+    const data = await handleResponse<{ profiles: ConnectionProfile[] }>(res);
+    return data.profiles || [];
+  },
+
+  saveProfile: async (profile: Partial<ConnectionProfile>): Promise<ConnectionProfile> => {
+    const res = await fetch('/api/connections/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    });
+    const data = await handleResponse<{ profile: ConnectionProfile }>(res);
+    return data.profile;
+  },
+
+  deleteProfile: async (profileId: string): Promise<void> => {
+    const res = await fetch(`/api/connections/profiles/${profileId}`, {
+      method: 'DELETE',
+    });
+    await handleResponse<any>(res);
+  },
+
+  testSavedProfile: async (profileId: string): Promise<any> => {
+    const res = await fetch(`/api/connections/profiles/${profileId}/test`, {
+      method: 'POST',
+    });
+    return handleResponse<any>(res);
+  },
 };
+

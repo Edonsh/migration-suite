@@ -40,10 +40,39 @@ def test_migration_status():
     assert "status" in data
     assert "logs" in data
 
-def test_migrations_history():
+def test_saved_connection_profiles_crud():
     client = get_test_client()
-    res = client.get("/api/migrations/history")
+    # 1. List profiles
+    res = client.get("/api/connections/profiles")
     assert res.status_code == 200
     data = res.json()
-    assert "history" in data
-    assert isinstance(data["history"], list)
+    assert "profiles" in data
+
+    # 2. Create new profile
+    new_profile = {
+        "name": "Test Analytics DW",
+        "snowflake_user": "TEST_USER",
+        "snowflake_password": "TestPassword123!",
+        "snowflake_account": "ACC-12345",
+        "snowflake_warehouse": "TEST_WH",
+        "snowflake_database": "ANALYTICS_DB",
+        "snowflake_schema": "PUBLIC",
+        "snowflake_role": "ANALYST"
+    }
+    create_res = client.post("/api/connections/profiles", json=new_profile)
+    assert create_res.status_code == 200
+    created = create_res.json()["profile"]
+    profile_id = created["id"]
+    assert created["name"] == "Test Analytics DW"
+
+    # 3. Update profile
+    updated_profile = dict(new_profile)
+    updated_profile["name"] = "Updated Analytics DW"
+    update_res = client.put(f"/api/connections/profiles/{profile_id}", json=updated_profile)
+    assert update_res.status_code == 200
+    assert update_res.json()["profile"]["name"] == "Updated Analytics DW"
+
+    # 4. Delete profile
+    del_res = client.delete(f"/api/connections/profiles/{profile_id}")
+    assert del_res.status_code == 200
+

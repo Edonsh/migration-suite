@@ -39,6 +39,12 @@ from .migration_engine.config import (
     LOCAL_DEV_DISPLAY_NAME,
 )
 
+from .migration_engine.connection_store import (
+    load_saved_profiles,
+    create_or_update_profile,
+    delete_profile,
+)
+
 app = FastAPI(title="Snowflake to Databricks Migration Suite API")
 
 app.add_middleware(
@@ -59,6 +65,18 @@ class CredentialsRequest(BaseModel):
     snowflake_database: str
     snowflake_schema: str
     snowflake_role: Optional[str] = None
+
+class SavedProfileRequest(BaseModel):
+    id: Optional[str] = None
+    name: str
+    snowflake_user: str
+    snowflake_password: Optional[str] = ""
+    snowflake_account: str
+    snowflake_warehouse: str
+    snowflake_database: str
+    snowflake_schema: str
+    snowflake_role: Optional[str] = None
+    is_default: Optional[bool] = False
 
 class MigrationRequest(BaseModel):
     selected_tables: List[str]
@@ -186,6 +204,74 @@ async def api_test_databricks(creds: Optional[CredentialsRequest] = None):
                 "state": state
             }
         }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ─── Saved Connection Profiles Endpoints ─────────────────────────────────────
+
+@app.get("/api/connections/profiles")
+async def get_saved_profiles():
+    """Returns all saved Snowflake connection profiles."""
+    profiles = load_saved_profiles(SNOWFLAKE_CONFIG)
+    # Mask passwords for UI security
+    safe_profiles = []
+    for p in profiles:
+        cp = dict(p)
+        cp["has_password"] = bool(cp.get("snowflake_password"))
+        cp["snowflake_password"] = "••••••••" if cp["has_password"] else ""
+        safe_profiles.append(cp)
+    return {"profiles": safe_profiles}
+
+@app.post("/api/connections/profiles")
+async def save_profile(req: SavedProfileRequest):
+    """Creates or updates a saved Snowflake connection profile."""
+    try:
+        saved = create_or_update_profile(req.dict())
+        return {"status": "success", "profile": saved}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.put("/api/connections/profiles/{profile_id}")
+async def update_profile(profile_id: str, req: SavedProfileRequest):
+    """Updates an existing connection profile."""
+    try:
+        data = req.dict()
+        data["id"] = profile_id
+        saved = create_or_update_profile(data)
+        return {"status": "success", "profile": saved}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/api/connections/profiles/{profile_id}")
+async def remove_profile(profile_id: str):
+    """Deletes a saved connection profile."""
+    if profile_id == "default_env":
+        raise HTTPException(status_code=400, detail="Cannot delete default environment profile")
+    success = delete_profile(profile_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return {"status": "success", "message": "Profile deleted"}
+
+@app.post("/api/connections/profiles/{profile_id}/test")
+async def test_saved_profile(profile_id: str):
+    """Tests connection for a specific saved profile."""
+    profiles = load_saved_profiles(SNOWFLAKE_CONFIG)
+    profile = next((p for p in profiles if p.get("id") == profile_id), None)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    try:
+        config = {
+            "user": profile["snowflake_user"],
+            "password": profile["snowflake_password"],
+            "account": profile["snowflake_account"],
+            "warehouse": profile["snowflake_warehouse"],
+            "database": profile["snowflake_database"],
+            "schema": profile["snowflake_schema"],
+        }
+        if profile.get("snowflake_role"):
+            config["role"] = profile["snowflake_role"]
+        result = test_snowflake_connection(config)
+        return {"status": "success", "result": result}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

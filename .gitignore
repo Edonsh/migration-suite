@@ -10,3 +10,5 @@ __pycache__/
 backend/staging/
 .git copy/
 databricks-app-logs.txt
+saved_connections.json
+backend/storage/
