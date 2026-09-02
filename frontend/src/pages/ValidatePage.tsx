@@ -3,7 +3,7 @@ import { useMigration } from '@/contexts/MigrationContext';
 import { api, type ValidationReport } from '@/lib/api';
 
 export default function ValidatePage() {
-  const { tables, selectedTables, authMode, creds } = useMigration();
+  const { tables, selectedTables, activeProfileId, activeProfile, creds } = useMigration();
   const [report, setReport] = useState<ValidationReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +24,8 @@ export default function ValidatePage() {
     try {
       const result = await api.runValidation(
         validatedTables.length > 0 ? validatedTables : undefined,
-        authMode === 'custom' ? creds : null
+        activeProfileId,
+        creds.snowflake_user ? creds : null
       );
       setReport(result);
     } catch (err: any) {

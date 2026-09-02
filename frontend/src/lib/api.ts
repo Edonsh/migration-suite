@@ -136,8 +136,8 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 export const api = {
   // Discovery & Analysis
-  getTables: async (creds?: SnowflakeCredentials | null): Promise<string[]> => {
-    if (creds) {
+  getTables: async (profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<string[]> => {
+    if (creds && creds.snowflake_user) {
       const res = await fetch('/api/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,28 +146,29 @@ export const api = {
       const data = await handleResponse<{ tables: string[] }>(res);
       return data.tables || [];
     } else {
-      const res = await fetch('/api/tables');
+      const url = profileId ? `/api/tables?profile_id=${encodeURIComponent(profileId)}` : '/api/tables';
+      const res = await fetch(url);
       const data = await handleResponse<{ tables: string[] }>(res);
       return data.tables || [];
     }
   },
 
-  analyzeTable: async (tableName: string, creds?: SnowflakeCredentials | null): Promise<TableDetails> => {
+  analyzeTable: async (tableName: string, profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<TableDetails> => {
     const res = await fetch('/api/analyze/table', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ table_name: tableName, creds: creds || null }),
+      body: JSON.stringify({ table_name: tableName, profile_id: profileId || null, creds: creds || null }),
     });
     const data = await handleResponse<{ details: TableDetails }>(res);
     return data.details;
   },
 
   // Migration Execution
-  startMigration: async (selectedTables: string[], creds?: SnowflakeCredentials | null): Promise<{ message: string; job_id: string }> => {
+  startMigration: async (selectedTables: string[], profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<{ message: string; job_id: string }> => {
     const res = await fetch('/api/migrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ selected_tables: selectedTables, creds: creds || null }),
+      body: JSON.stringify({ selected_tables: selectedTables, profile_id: profileId || null, creds: creds || null }),
     });
     return handleResponse<{ message: string; job_id: string }>(res);
   },
@@ -184,11 +185,11 @@ export const api = {
   },
 
   // Validation
-  runValidation: async (tables?: string[], creds?: SnowflakeCredentials | null): Promise<ValidationReport> => {
+  runValidation: async (tables?: string[], profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<ValidationReport> => {
     const res = await fetch('/api/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tables: tables || null, creds: creds || null }),
+      body: JSON.stringify({ tables: tables || null, profile_id: profileId || null, creds: creds || null }),
     });
     const data = await handleResponse<{ report: ValidationReport }>(res);
     return data.report;

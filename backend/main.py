@@ -41,6 +41,7 @@ from .migration_engine.config import (
 
 from .migration_engine.connection_store import (
     load_saved_profiles,
+    get_profile_by_id,
     create_or_update_profile,
     delete_profile,
 )
@@ -81,14 +82,53 @@ class SavedProfileRequest(BaseModel):
 class MigrationRequest(BaseModel):
     selected_tables: List[str]
     creds: Optional[CredentialsRequest] = None
+    profile_id: Optional[str] = None
 
 class AnalyzeTableRequest(BaseModel):
     table_name: str
     creds: Optional[CredentialsRequest] = None
+    profile_id: Optional[str] = None
 
 class ValidateRequest(BaseModel):
     tables: Optional[List[str]] = None
     creds: Optional[CredentialsRequest] = None
+    profile_id: Optional[str] = None
+
+def resolve_snowflake_config(creds: Optional[CredentialsRequest] = None, profile_id: Optional[str] = None) -> Dict[str, Any]:
+    """Resolves Snowflake configuration strictly from an explicit profile or credentials."""
+    if creds and creds.snowflake_user:
+        return build_snowflake_config(creds)
+    if profile_id:
+        p = get_profile_by_id(profile_id)
+        if p:
+            cfg = {
+                "user": p["snowflake_user"],
+                "password": p["snowflake_password"],
+                "account": p["snowflake_account"],
+                "warehouse": p["snowflake_warehouse"],
+                "database": p["snowflake_database"],
+                "schema": p["snowflake_schema"],
+            }
+            if p.get("snowflake_role"):
+                cfg["role"] = p["snowflake_role"]
+            return cfg
+    # Fallback to first saved profile in connection store
+    profiles = load_saved_profiles()
+    if profiles:
+        active = profiles[0]
+        cfg = {
+            "user": active["snowflake_user"],
+            "password": active["snowflake_password"],
+            "account": active["snowflake_account"],
+            "warehouse": active["snowflake_warehouse"],
+            "database": active["snowflake_database"],
+            "schema": active["snowflake_schema"],
+        }
+        if active.get("snowflake_role"):
+            cfg["role"] = active["snowflake_role"]
+        return cfg
+
+    raise ValueError("No Snowflake connection profile found. Please add or select a Snowflake connection profile.")
 
 # ─── In-Memory State ──────────────────────────────────────────────────────────
 
@@ -280,25 +320,34 @@ async def test_saved_profile(profile_id: str):
 @app.post("/api/connect")
 async def connect_sources(creds: CredentialsRequest):
     try:
-        config = build_snowflake_config(creds)
+        config = resolve_snowflake_config(creds=creds)
         tables = discover_snowflake_tables(config)
         return {"status": "success", "tables": tables}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/tables")
-async def get_tables():
+async def get_tables(profile_id: Optional[str] = None):
     try:
-        validate_snowflake_env_vars()
-        tables = discover_snowflake_tables()
+        config = resolve_snowflake_config(profile_id=profile_id)
+        tables = discover_snowflake_tables(config)
         return {"tables": tables}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/tables")
+async def post_tables(req: Optional[AnalyzeTableRequest] = None):
+    try:
+        config = resolve_snowflake_config(creds=req.creds if req else None, profile_id=req.profile_id if req else None)
+        tables = discover_snowflake_tables(config)
+        return {"tables": tables}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/analyze/table")
 async def api_analyze_table(req: AnalyzeTableRequest):
     try:
-        config = build_snowflake_config(req.creds)
+        config = resolve_snowflake_config(creds=req.creds, profile_id=req.profile_id)
         details = get_table_details(req.table_name, config)
         return {"status": "success", "details": details}
     except Exception as e:
@@ -329,17 +378,17 @@ async def start_migration(req: MigrationRequest, background_tasks: BackgroundTas
         "logs": [],
     })
     append_log(f"Starting migration job [{job_id}] for {len(req.selected_tables)} table(s)")
-    background_tasks.add_task(run_migration_task, job_id, req.selected_tables, req.creds)
+    background_tasks.add_task(run_migration_task, job_id, req.selected_tables, req.creds, req.profile_id)
     return {"message": "Migration started", "job_id": job_id, "status_url": "/api/status"}
 
-def run_migration_task(job_id: str, selected_tables: List[str], creds: Optional[CredentialsRequest] = None):
+def run_migration_task(job_id: str, selected_tables: List[str], creds: Optional[CredentialsRequest] = None, profile_id: Optional[str] = None):
     start_ts = time.time()
     try:
         migration_status["stage"] = "PREPARING_ENVIRONMENT"
         append_log("Validating Databricks & Snowflake environments...")
         validate_databricks_env_vars()
         databricks_config = build_databricks_config(creds)
-        snowflake_config = build_snowflake_config(creds)
+        snowflake_config = resolve_snowflake_config(creds=creds, profile_id=profile_id)
         w = WorkspaceClient()
 
         append_log(f"Ensuring Unity Catalog hierarchy: {snowflake_config['database']}.{snowflake_config['schema']}...")
@@ -398,7 +447,6 @@ def run_migration_task(job_id: str, selected_tables: List[str], creds: Optional[
         migration_status["duration_seconds"] = round(time.time() - start_ts, 2)
         append_log(f"Migration failed: {str(e)}", level="ERROR")
     finally:
-        # Save snapshot into history
         history_entry = dict(migration_status)
         history_entry["table_progress"] = dict(migration_status.get("table_progress", {}))
         history_entry["logs"] = list(migration_status.get("logs", []))
@@ -425,17 +473,16 @@ async def get_migrations_history():
 @app.post("/api/validate")
 async def api_validate_tables(req: ValidateRequest):
     try:
+        sf_cfg = resolve_snowflake_config(creds=req.creds, profile_id=req.profile_id)
         tables = req.tables
         if not tables:
-            # Fallback to last migrated tables or discover
             if migration_status.get("selected_tables"):
                 tables = migration_status["selected_tables"]
             else:
-                tables = discover_snowflake_tables()
+                tables = discover_snowflake_tables(sf_cfg)
 
         w = WorkspaceClient()
         validate_databricks_env_vars()
-        sf_cfg = build_snowflake_config(req.creds)
         report = validate_migrated_tables(w, tables, sf_cfg, DATABRICKS_WAREHOUSE_ID)
         return {"status": "success", "report": report}
     except Exception as e:
@@ -446,3 +493,4 @@ async def api_validate_tables(req: ValidateRequest):
 static_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if static_dir.exists():
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+

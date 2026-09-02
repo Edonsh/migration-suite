@@ -12,7 +12,8 @@ export default function MigratePage() {
     selectAllTables,
     clearSelectedTables,
     loadingTables,
-    authMode,
+    activeProfileId,
+    activeProfile,
     creds,
     status,
   } = useMigration();
@@ -34,7 +35,7 @@ export default function MigratePage() {
     setStarting(true);
     setErrorMessage(null);
     try {
-      await api.startMigration(selectedTables, authMode === 'custom' ? creds : null);
+      await api.startMigration(selectedTables, activeProfileId, creds.snowflake_user ? creds : null);
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to trigger migration pipeline');
     } finally {
@@ -159,16 +160,24 @@ export default function MigratePage() {
             {/* Pipeline Configuration Badge */}
             <div className="p-3 bg-[#0c0e14] border border-[#1e2230] rounded-lg space-y-1.5 text-xs font-mono">
               <div className="flex justify-between text-slate-400">
+                <span>Source Profile:</span>
+                <span className="text-sky-400 font-bold truncate max-w-[180px]">
+                  {activeProfile?.name || 'Snowflake'}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Database / Schema:</span>
+                <span className="text-slate-200">
+                  {activeProfile?.snowflake_database}.{activeProfile?.snowflake_schema}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-400">
                 <span>Workers:</span>
                 <span className="text-slate-200">4 Parallel Threads</span>
               </div>
               <div className="flex justify-between text-slate-400">
-                <span>Staging:</span>
-                <span className="text-slate-200">Unity Catalog Volume</span>
-              </div>
-              <div className="flex justify-between text-slate-400">
-                <span>Format:</span>
-                <span className="text-slate-200">Delta Lake (COPY INTO)</span>
+                <span>Target:</span>
+                <span className="text-slate-200">Unity Catalog Delta</span>
               </div>
             </div>
 
