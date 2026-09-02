@@ -1,0 +1,12 @@
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+build/
+__pycache__/
+*.pyc
+.env
+.databricks/
+backend/staging/
+.git copy/
+databricks-app-logs.txt

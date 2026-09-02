@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+
+snowflake-connector-python>=3.0.0
+databricks-sdk>=0.18.0
+pandas>=2.0.0
+pyarrow>=12.0.0
+python-dotenv>=1.0.0

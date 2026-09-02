@@ -1,0 +1,9 @@
+command: ["python", "app.py"]
+resources:
+  - name: sql_warehouse
+    type: sql_warehouse
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql_warehouse
+  - name: DATABRICKS_SECRET_SCOPE
+    value: migration-suite-secrets
