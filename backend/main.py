@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -11,6 +11,9 @@ from .migration_engine.config import (
     build_snowflake_config,
     validate_databricks_env_vars,
     validate_snowflake_env_vars,
+    ENVIRONMENT,
+    LOCAL_DEV_USER_EMAIL,
+    LOCAL_DEV_DISPLAY_NAME,
 )
 from databricks.sdk import WorkspaceClient
 
@@ -57,6 +60,25 @@ async def connect_sources(creds: CredentialsRequest):
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/api/identity")
+async def get_identity(request: Request):
+    """Returns the Databricks-forwarded identity of the currently logged-in user.
+
+    In production (Databricks Apps), headers X-Forwarded-Email and
+    X-Forwarded-Preferred-Username are injected by the platform per-request.
+    In local development (ENVIRONMENT=local) these headers are absent, so we
+    fall back to LOCAL_DEV_USER_EMAIL / LOCAL_DEV_DISPLAY_NAME.
+    """
+    email = request.headers.get("x-forwarded-email")
+    display_name = request.headers.get("x-forwarded-preferred-username")
+
+    if not email and ENVIRONMENT == "local":
+        email = LOCAL_DEV_USER_EMAIL
+        display_name = LOCAL_DEV_DISPLAY_NAME
+
+    return {"email": email or "", "display_name": display_name or email or ""}
 
 @app.get("/api/tables")
 async def get_tables():

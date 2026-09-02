@@ -10,6 +10,13 @@ if DOTENV_PATH.exists():
 
 DATABRICKS_SECRET_SCOPE = os.environ.get("DATABRICKS_SECRET_SCOPE")
 
+# Environment detection — controls local-dev fallback behavior
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "local")
+
+# Local dev identity fallback (only active when ENVIRONMENT=local)
+LOCAL_DEV_USER_EMAIL = os.environ.get("LOCAL_DEV_USER_EMAIL", "dev@localhost")
+LOCAL_DEV_DISPLAY_NAME = os.environ.get("LOCAL_DEV_DISPLAY_NAME", "Dev User")
+
 
 def get_databricks_warehouse_id():
     warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID")
