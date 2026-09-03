@@ -3,7 +3,7 @@ import { useMigration } from '@/contexts/MigrationContext';
 import { api, type ValidationReport } from '@/lib/api';
 
 export default function ValidatePage() {
-  const { tables, selectedTables, activeProfileId, activeProfile, creds } = useMigration();
+  const { tables, selectedTables, activeProfileId, creds } = useMigration();
   const [report, setReport] = useState<ValidationReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
