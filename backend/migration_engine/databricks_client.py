@@ -86,7 +86,6 @@ def load_via_copy_into(workspace_client, warehouse_id, sf_database, sf_schema, p
     COPY INTO {full_table_path}
     FROM '{volume_file_path}'
     FILEFORMAT = PARQUET
-    FORMAT_OPTIONS ('mergeSchema' = 'true')
     COPY_OPTIONS ('force' = 'true');
     """
     

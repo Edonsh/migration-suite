@@ -10,13 +10,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 class FakeCursor:
     def __init__(self):
         self.query = None
+        self.description = [("CUSTOMER_ID",), ("FIRST_NAME",)]
         self.closed = False
 
     def execute(self, query):
         self.query = query
 
     def fetch_pandas_all(self):
-        return pd.DataFrame({"CUSTOMER_ID": [101, 102], "FIRST_NAME": ["Ada", "Lin"]})
+        return pd.DataFrame({"customer_id": [101, 102], "first_name": ["Ada", "Lin"]})
 
     def close(self):
         self.closed = True
