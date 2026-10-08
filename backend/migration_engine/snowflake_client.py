@@ -107,8 +107,8 @@ def _full_name(config, object_name: str) -> str:
     schema = config.get("schema")
     return f"{database}.{schema}.{object_name}" if database and schema else object_name
 
-def extract_and_stage_parquet(table_name, config=None, local_staging_dir="./staging"):
-    """Extracts Snowflake data, sanitizes PyArrow types/metadata, and stages Parquet file."""
+def extract_and_stage_parquet(table_name, config=None, local_staging_dir="./staging", target_columns=None):
+    """Extract Snowflake rows and stage Parquet using the target table's schema when supplied."""
     print(f"\n--- [1/3] EXTRACTING & STAGING PARQUET: {table_name} ---")
     os.makedirs(local_staging_dir, exist_ok=True)
     
@@ -124,27 +124,65 @@ def extract_and_stage_parquet(table_name, config=None, local_staging_dir="./stag
         df = cursor.fetch_pandas_all()
         if len(source_columns) == len(df.columns):
             df.columns = source_columns
-        
+
+        if target_columns:
+            target_by_name = {column["name"].casefold(): column for column in target_columns}
+            missing_columns = [name for name in df.columns if name.casefold() not in target_by_name]
+            if missing_columns:
+                raise ValueError(
+                    f"Target table {table_name} is missing source columns: {', '.join(missing_columns)}"
+                )
+            df.columns = [target_by_name[name.casefold()]["name"] for name in df.columns]
+
         table = pa.Table.from_pandas(df, preserve_index=False)
-        
+
         fields = []
         for field in table.schema:
             str_type = str(field.type).lower()
-            
-            if "int" in str_type:
-                target_type = pa.int64()
+
+            target_column = target_by_name.get(field.name.casefold()) if target_columns else None
+            target_type = (target_column["type"].upper() if target_column else "")
+            if target_type in {"BYTE", "TINYINT"}:
+                arrow_type = pa.int8()
+            elif target_type == "SMALLINT":
+                arrow_type = pa.int16()
+            elif target_type in {"INT", "INTEGER"}:
+                arrow_type = pa.int32()
+            elif target_type in {"BIGINT", "LONG"}:
+                arrow_type = pa.int64()
+            elif target_type.startswith("DECIMAL") or target_type.startswith("NUMERIC"):
+                precision_scale = target_type[target_type.find("(") + 1:target_type.rfind(")")].split(",") if "(" in target_type else []
+                precision = int(precision_scale[0]) if precision_scale else 38
+                scale = int(precision_scale[1]) if len(precision_scale) > 1 else 18
+                arrow_type = pa.decimal128(precision, scale)
+            elif target_type in {"FLOAT", "REAL"}:
+                arrow_type = pa.float32()
+            elif target_type in {"DOUBLE"}:
+                arrow_type = pa.float64()
+            elif target_type in {"BOOLEAN", "BOOL"}:
+                arrow_type = pa.bool_()
+            elif target_type == "DATE":
+                arrow_type = pa.date32()
+            elif target_type.startswith("TIMESTAMP"):
+                arrow_type = pa.timestamp("us")
+            elif target_type in {"BINARY"}:
+                arrow_type = pa.binary()
+            elif target_type:
+                arrow_type = pa.string()
+            elif "int" in str_type:
+                arrow_type = pa.int64()
             elif "float" in str_type or "double" in str_type or "decimal" in str_type:
-                target_type = pa.float64()
+                arrow_type = pa.float64()
             elif "bool" in str_type:
-                target_type = pa.bool_()
+                arrow_type = pa.bool_()
             elif "date" in str_type:
-                target_type = pa.date32()
+                arrow_type = pa.date32()
             elif "timestamp" in str_type:
-                target_type = pa.timestamp("ms")
+                arrow_type = pa.timestamp("us")
             else:
-                target_type = pa.string()
-                
-            fields.append(pa.field(field.name, target_type, nullable=True))
+                arrow_type = pa.string()
+
+            fields.append(pa.field(field.name, arrow_type, nullable=True))
             
         clean_schema = pa.schema(fields)
         clean_table = table.cast(clean_schema)

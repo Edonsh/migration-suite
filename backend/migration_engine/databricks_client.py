@@ -74,6 +74,29 @@ def upload_parquet_to_volume(workspace_client, local_file_path, table_name, volu
     print("File uploaded successfully to Unity Catalog Volume!")
     return volume_file_path
 
+
+def get_delta_table_columns(workspace_client, warehouse_id, sf_database, sf_schema, table_name):
+    """Return the existing target Delta table's column names and Spark SQL types."""
+    target_catalog, target_schema = determine_target_catalog_and_schema(sf_database, sf_schema)
+    table_path = qualified_name(target_catalog, target_schema, table_name)
+    response = execute_sql(
+        workspace_client,
+        warehouse_id,
+        f"DESCRIBE TABLE {table_path}",
+        catalog=target_catalog,
+        schema=target_schema,
+    )
+    rows = response.result.data_array if response.result else []
+    columns = [
+        {"name": row[0], "type": row[1]}
+        for row in rows
+        if len(row) >= 2 and row[0] and not str(row[0]).startswith("#")
+    ]
+    if not columns:
+        raise RuntimeError(f"Target Delta table {table_path} has no readable columns.")
+    return columns
+
+
 def load_via_copy_into(workspace_client, warehouse_id, sf_database, sf_schema, payload, volume_file_path):
     """Load Parquet into a Lakebridge-created Databricks Delta table."""
     target_catalog, target_schema = determine_target_catalog_and_schema(sf_database, sf_schema)

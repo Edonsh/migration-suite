@@ -45,11 +45,16 @@ def test_extract_preserves_snowflake_column_case_in_parquet(tmp_path, monkeypatc
         "CUSTOMERS",
         {"database": "GMIGRATE_TEST", "schema": "TEST_SCHEMA"},
         local_staging_dir=str(tmp_path),
+        target_columns=[
+            {"name": "CUSTOMER_ID", "type": "decimal(38,0)"},
+            {"name": "FIRST_NAME", "type": "varchar(100)"},
+        ],
     )
 
     parquet = pq.read_table(payload["local_parquet_path"])
     assert payload["row_count"] == 2
     assert parquet.column_names == ["CUSTOMER_ID", "FIRST_NAME"]
+    assert str(parquet.schema.field("CUSTOMER_ID").type) == "decimal128(38, 0)"
     assert connection.fake_cursor.query == "SELECT * FROM GMIGRATE_TEST.TEST_SCHEMA.CUSTOMERS;"
     assert connection.fake_cursor.closed
     assert connection.closed

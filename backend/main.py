@@ -22,6 +22,7 @@ from .migration_engine.databricks_client import (
     ensure_unity_catalog_hierarchy,
     upload_parquet_to_volume,
     load_via_copy_into,
+    get_delta_table_columns,
     execute_sql,
 )
 from .migration_engine.validator import validate_migrated_tables
@@ -613,8 +614,16 @@ def run_migration_task(job_id: str, selected_tables: List[str], creds: Optional[
             # Step 1: Extract Parquet
             migration_status["stage"] = f"EXTRACTING ({table_name})"
             t_entry["stage"] = "EXTRACTING"
+            append_log(f"[{idx}/{total}] Reading target Delta schema for {table_name}...")
+            target_columns = get_delta_table_columns(
+                w,
+                databricks_config["warehouse_id"],
+                snowflake_config["database"],
+                snowflake_config["schema"],
+                table_name,
+            )
             append_log(f"[{idx}/{total}] Extracting Parquet from Snowflake: {table_name}...")
-            payload = extract_and_stage_parquet(table_name, snowflake_config)
+            payload = extract_and_stage_parquet(table_name, snowflake_config, target_columns=target_columns)
             t_entry["rows"] = payload.get("row_count", 0)
             append_log(f"Extracted {t_entry['rows']} rows for {table_name}")
 
