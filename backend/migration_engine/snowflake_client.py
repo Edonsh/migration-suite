@@ -118,7 +118,6 @@ def extract_and_stage_parquet(table_name, config=None, local_staging_dir="./stag
     try:
         cursor.execute(f"SELECT * FROM {_full_name(config or SNOWFLAKE_CONFIG, table_name)};")
         df = cursor.fetch_pandas_all()
-        df.columns = [col.lower() for col in df.columns]
         
         table = pa.Table.from_pandas(df, preserve_index=False)
         
