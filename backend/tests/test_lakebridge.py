@@ -208,6 +208,41 @@ class TestAvailability:
         assert result.lakebridge_used is False
         assert "transpile failed" in result.errors[0]
 
+    def test_batch_transpilation_uses_one_cli_call_and_maps_outputs(self):
+        from backend.migration_engine.lakebridge.config import LakebridgeConfig
+        from backend.migration_engine.lakebridge.models import LakebridgeAvailability, LakebridgeCommandResult
+        from backend.migration_engine.lakebridge.service import LakebridgeService
+
+        class BatchClient:
+            calls = 0
+            availability_calls = 0
+
+            def availability(self):
+                self.availability_calls += 1
+                return LakebridgeAvailability(enabled=True, available=True)
+
+            def run(self, args, **kwargs):
+                self.calls += 1
+                input_dir = __import__("pathlib").Path(args[args.index("--input-source") + 1])
+                output_dir = __import__("pathlib").Path(args[args.index("--output-folder") + 1])
+                for source_file in input_dir.glob("*.sql"):
+                    (output_dir / source_file.name).write_text(f"-- converted {source_file.stem}", encoding="utf-8")
+                return LakebridgeCommandResult(command=list(args), returncode=0)
+
+        client = BatchClient()
+        service = LakebridgeService(config=LakebridgeConfig(enabled=True), client=client)
+        results = service.convert_sql_sources([
+            ("CUSTOMERS", "table", "CREATE TABLE CUSTOMERS (ID INT)"),
+            ("ORDERS", "table", "CREATE TABLE ORDERS (ID INT)"),
+        ])
+
+        assert client.calls == 1
+        assert client.availability_calls == 1
+        assert [result.source_object for result in results] == ["CUSTOMERS", "ORDERS"]
+        assert all(result.status == "SUCCEEDED" and result.lakebridge_used for result in results)
+        assert "0000_customers" in results[0].target_definition.lower()
+        assert "0001_orders" in results[1].target_definition.lower()
+
 
 # ---------- unit: MigrationResult contract ------------------------------------
 

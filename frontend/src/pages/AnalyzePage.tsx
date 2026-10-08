@@ -168,6 +168,7 @@ export default function AnalyzePage() {
           <div>
             <h2 className="text-base font-bold text-slate-100">SQL transpilation</h2>
             <p className="mt-1 text-xs text-slate-400">Select Snowflake objects and ask Lakebridge to generate Databricks SQL.</p>
+            <p className="mt-1 text-[11px] text-slate-500">Selected objects are grouped into one Lakebridge batch.</p>
           </div>
           <div className="grid grid-cols-3 gap-1 rounded-lg border border-[#252a3a] bg-[#0c0e14] p-1">
             {(['table', 'view', 'procedure'] as ObjectType[]).map((type) => (

@@ -27,44 +27,52 @@ class LakebridgeClient:
 
     def __init__(self, config: Optional[LakebridgeConfig] = None):
         self.config = config or get_lakebridge_config()
+        self._availability_cache: Optional[LakebridgeAvailability] = None
 
     def base_command(self) -> List[str]:
         return shlex.split(self.config.executable) + ["labs", "lakebridge"]
 
     def availability(self) -> LakebridgeAvailability:
+        if self._availability_cache is not None:
+            return self._availability_cache
+
         if not self.config.enabled:
-            return LakebridgeAvailability(
+            self._availability_cache = LakebridgeAvailability(
                 enabled=False,
                 available=False,
                 reason="Lakebridge is disabled by LAKEBRIDGE_ENABLED.",
                 command=self.base_command(),
             )
+            return self._availability_cache
 
         executable = shlex.split(self.config.executable)[0]
         if not shutil.which(executable):
-            return LakebridgeAvailability(
+            self._availability_cache = LakebridgeAvailability(
                 enabled=True,
                 available=False,
                 reason=f"Lakebridge CLI executable '{executable}' was not found on PATH.",
                 command=self.base_command(),
             )
+            return self._availability_cache
 
         result = self.run(["--help"], timeout_seconds=30, check=False)
         if result.returncode != 0:
-            return LakebridgeAvailability(
+            self._availability_cache = LakebridgeAvailability(
                 enabled=True,
                 available=False,
                 reason=(result.stderr or result.stdout or "Lakebridge help command failed.").strip(),
                 command=result.command,
             )
+            return self._availability_cache
 
         version = self._detect_version()
-        return LakebridgeAvailability(
+        self._availability_cache = LakebridgeAvailability(
             enabled=True,
             available=True,
             version=version,
             command=self.base_command(),
         )
+        return self._availability_cache
 
     def run(
         self,

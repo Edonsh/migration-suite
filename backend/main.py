@@ -422,7 +422,8 @@ def api_generate_ddl(req: GenerateDDLRequest):
                 detail=f"Lakebridge is not available: {availability.get('reason', 'Check Lakebridge configuration.')}",
             )
 
-        results = []
+        snowflake_ddls = {}
+        source_errors = {}
         for obj_name in req.object_names:
             full_name = f"{database}.{schema}.{obj_name}"
             snowflake_ddl = ""
@@ -480,19 +481,30 @@ def api_generate_ddl(req: GenerateDDLRequest):
             except Exception as e:
                 error = f"Failed to fetch Snowflake DDL: {e}"
 
-            # 2. Convert with Lakebridge only; never substitute hand-written mappings.
-            lakebridge_used = False
-            if snowflake_ddl:
-                try:
-                    conversion = svc.convert_sql_text(snowflake_ddl, obj_name, req.object_type)
-                    if conversion.status == "SUCCEEDED" and conversion.target_definition:
-                        generated_ddl = conversion.target_definition
-                        lakebridge_used = True
-                    else:
-                        error = "; ".join(conversion.errors or conversion.warnings) or "Lakebridge did not produce SQL output."
-                except Exception as ex:
-                    error = f"Lakebridge transpilation failed: {ex}"
-            else:
+            snowflake_ddls[obj_name] = snowflake_ddl
+            if error:
+                source_errors[obj_name] = error
+
+        conversions = svc.convert_sql_sources([
+            (obj_name, req.object_type, snowflake_ddls[obj_name])
+            for obj_name in req.object_names
+            if snowflake_ddls.get(obj_name)
+        ])
+        conversions_by_name = {conversion.source_object: conversion for conversion in conversions}
+
+        results = []
+        for obj_name in req.object_names:
+            snowflake_ddl = snowflake_ddls.get(obj_name, "")
+            conversion = conversions_by_name.get(obj_name)
+            generated_ddl = conversion.target_definition if conversion and conversion.status == "SUCCEEDED" else ""
+            lakebridge_used = bool(generated_ddl and conversion and conversion.lakebridge_used)
+            error = source_errors.get(obj_name)
+            if snowflake_ddl and not lakebridge_used:
+                error = error or (
+                    "; ".join(conversion.errors or conversion.warnings)
+                    if conversion else "Lakebridge did not return a result for this object."
+                )
+            elif not snowflake_ddl:
                 error = error or f"Could not retrieve DDL for {obj_name} from Snowflake."
 
             # 3. Optionally execute in Databricks

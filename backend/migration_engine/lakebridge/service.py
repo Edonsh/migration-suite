@@ -4,7 +4,7 @@ import tempfile
 import time as _time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from .client import LakebridgeClient
 from .config import LakebridgeConfig, get_lakebridge_config
@@ -142,6 +142,77 @@ class LakebridgeService:
             start, migration_result.status, migration_result.errors, migration_result.warnings,
         )
         return migration_result
+
+    def convert_sql_sources(self, sources: Sequence[tuple[str, str, str]]) -> list[MigrationResult]:
+        """Transpile multiple (source object, object type, SQL) items in one CLI call."""
+        if not sources:
+            return []
+
+        start = _time.time()
+        availability = self.client.availability()
+        if not availability.available:
+            return [
+                self._unavailable_result(source_object, object_type, availability, sql_text)
+                for source_object, object_type, sql_text in sources
+            ]
+
+        with tempfile.TemporaryDirectory(prefix="gmigrate_lakebridge_batch_") as temp_dir:
+            root = Path(temp_dir)
+            input_dir = root / "input"
+            output_dir = root / "output"
+            input_dir.mkdir()
+            output_dir.mkdir()
+
+            source_files: dict[str, tuple[str, str, str]] = {}
+            for index, (source_object, object_type, sql_text) in enumerate(sources):
+                safe_name = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in source_object)
+                file_stem = f"{index:04d}_{safe_name or 'source'}"
+                (input_dir / f"{file_stem}.sql").write_text(sql_text or "", encoding="utf-8")
+                source_files[file_stem.lower()] = (source_object, object_type, sql_text)
+
+            try:
+                cmd_result = self.client.run([
+                    "transpile",
+                    "--source-dialect",
+                    self.config.source_dialect,
+                    "--input-source",
+                    str(input_dir),
+                    "--output-folder",
+                    str(output_dir),
+                    "--skip-validation",
+                    "true",
+                ], check=False)
+                output_by_stem = {path.stem.lower(): path for path in output_dir.rglob("*.sql")}
+                batch_error = cmd_result.stderr or cmd_result.stdout or "Lakebridge failed or produced no SQL output."
+            except Exception as ex:
+                from .models import LakebridgeCommandResult
+                cmd_result = LakebridgeCommandResult(command=[], returncode=1, stderr=str(ex))
+                output_by_stem = {}
+                batch_error = str(ex)
+
+            results = []
+            for file_stem, (source_object, object_type, sql_text) in source_files.items():
+                output_path = output_by_stem.get(file_stem)
+                converted = output_path.read_text(encoding="utf-8") if output_path else None
+                succeeded = bool(converted and cmd_result.returncode == 0)
+                result = MigrationResult(
+                    source_object=source_object,
+                    object_type=object_type,
+                    status="SUCCEEDED" if succeeded else "FAILED",
+                    source_definition=sql_text,
+                    target_definition=converted,
+                    lakebridge_used=succeeded,
+                    errors=[] if succeeded else [batch_error],
+                    output_location=str(output_path) if output_path else str(output_dir),
+                    raw={"stdout": cmd_result.stdout, "stderr": cmd_result.stderr},
+                )
+                results.append(result)
+                self._log_op(
+                    "convert_sql_sources", source_object, object_type, "transpile",
+                    start, result.status, result.errors, result.warnings,
+                )
+
+        return results
 
     def _read_first_sql(self, output_dir: Path) -> Optional[str]:
         for path in sorted(output_dir.rglob("*.sql")):
