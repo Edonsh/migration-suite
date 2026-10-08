@@ -1,5 +1,7 @@
 import os
+import tempfile
 import concurrent.futures
+from pathlib import Path
 import snowflake.connector
 import pandas as pd
 import pyarrow as pa
@@ -28,6 +30,44 @@ def discover_snowflake_tables(config=None):
     finally:
         cursor.close()
         conn.close()
+
+def discover_snowflake_all_objects(config=None):
+    """Discovers Snowflake tables, views, and stored procedures for the configured schema."""
+    config = config or SNOWFLAKE_CONFIG
+    if not config.get("database") or not config.get("schema"):
+        raise ValueError("Snowflake database and schema are required.")
+
+    database = config["database"]
+    schema = config["schema"]
+    conn = get_snowflake_connection(config)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(f"SHOW TABLES IN SCHEMA {database}.{schema};")
+        tables = [row[1] for row in cursor.fetchall()]
+
+        cursor.execute(f"SHOW VIEWS IN SCHEMA {database}.{schema};")
+        views = [row[1] for row in cursor.fetchall()]
+
+        cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database}.{schema};")
+        procedures = [row[1] for row in cursor.fetchall()]
+
+        return {
+            "database": database,
+            "schema": schema,
+            "tables": tables,
+            "views": views,
+            "procedures": procedures,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def _full_name(config, object_name: str) -> str:
+    database = config.get("database")
+    schema = config.get("schema")
+    return f"{database}.{schema}.{object_name}" if database and schema else object_name
 
 def select_tables_interactively(available_tables):
     """Presents an interactive menu allowing the user to pick tables."""
@@ -154,7 +194,7 @@ def map_snowflake_to_databricks_type(sf_type: str) -> tuple[str, str]:
     else:
         return "STRING", "HIGH"
 
-def get_table_details(table_name: str, config=None, sample_limit: int = 5):
+def get_table_details(table_name: str, config=None, sample_limit: int = 5, lakebridge_service=None):
     """Fetches column schema, row counts, and sample data for a given Snowflake table."""
     conn = get_snowflake_connection(config)
     cursor = conn.cursor()
@@ -192,11 +232,29 @@ def get_table_details(table_name: str, config=None, sample_limit: int = 5):
 
         target_db = (config.get("database") if config else "migration_db").lower()
         target_schema = (config.get("schema") if config else "source_data").lower()
-        generated_ddl = (
+        fallback_ddl = (
             f"CREATE TABLE IF NOT EXISTS `{target_db}`.`{target_schema}`.`{table_name.lower()}` (\n"
             + ",\n".join(ddl_columns)
             + "\n)\nUSING DELTA\nTBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true');"
         )
+
+        # Fetch the original Snowflake DDL so Lakebridge can transpile it
+        snowflake_ddl = ""
+        try:
+            full_name = _full_name(config or SNOWFLAKE_CONFIG, table_name)
+            cursor.execute(f"SELECT GET_DDL('TABLE', '{full_name}')")
+            ddl_row = cursor.fetchone()
+            snowflake_ddl = ddl_row[0] if ddl_row else ""
+        except Exception:
+            snowflake_ddl = ""
+
+        # Lakebridge DDL conversion — falls back to the type-mapper DDL if unavailable
+        lakebridge_result = None
+        generated_ddl = fallback_ddl
+        if lakebridge_service and snowflake_ddl:
+            lakebridge_result = lakebridge_service.convert_sql_text(snowflake_ddl, table_name, "table")
+            if lakebridge_result.target_definition:
+                generated_ddl = lakebridge_result.target_definition
 
         return {
             "table_name": table_name,
@@ -204,8 +262,127 @@ def get_table_details(table_name: str, config=None, sample_limit: int = 5):
             "column_count": len(columns),
             "columns": columns,
             "sample_rows": sample_data,
+            "snowflake_ddl": snowflake_ddl,
             "generated_ddl": generated_ddl,
-            "target_table": f"`{target_db}`.`{target_schema}`.`{table_name.lower()}`"
+            "target_table": f"`{target_db}`.`{target_schema}`.`{table_name.lower()}`",
+            "lakebridge": lakebridge_result.__dict__ if lakebridge_result else None,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_view_details(view_name: str, config=None, sample_limit: int = 5, lakebridge_service=None):
+    """Fetches Snowflake view metadata and uses Lakebridge for SQL conversion when available."""
+    config = config or SNOWFLAKE_CONFIG
+    conn = get_snowflake_connection(config)
+    cursor = conn.cursor()
+    full_view = _full_name(config, view_name)
+    try:
+        definition = ""
+        try:
+            cursor.execute(f"SELECT GET_DDL('VIEW', '{full_view}')")
+            row = cursor.fetchone()
+            definition = row[0] if row else ""
+        except Exception as e:
+            definition = f"-- Unable to retrieve view DDL: {e}"
+
+        cursor.execute(f"DESCRIBE VIEW {full_view};")
+        desc_rows = cursor.fetchall()
+        columns = []
+        for col in desc_rows:
+            col_name = str(col[0]).lower()
+            sf_type = str(col[1])
+            is_nullable = str(col[3]).upper() == "Y" if len(col) > 3 else True
+            dbx_type, compat = map_snowflake_to_databricks_type(sf_type)
+            columns.append({
+                "name": col_name,
+                "source_type": sf_type,
+                "snowflake_type": sf_type,
+                "databricks_type": dbx_type,
+                "nullable": is_nullable,
+                "compatibility": compat,
+            })
+
+        sample_data = []
+        try:
+            cursor.execute(f"SELECT * FROM {full_view} LIMIT {sample_limit};")
+            sample_df = cursor.fetch_pandas_all()
+            sample_df.columns = [c.lower() for c in sample_df.columns]
+            sample_data = sample_df.fillna("").astype(str).to_dict(orient="records")
+        except Exception:
+            sample_data = []
+
+        target_db = config.get("database", "migration_db").lower()
+        target_schema = config.get("schema", "source_data").lower()
+        fallback_ddl = (
+            f"-- Databricks SQL View Equivalent\n"
+            f"CREATE OR REPLACE VIEW `{target_db}`.`{target_schema}`.`{view_name.lower()}` AS\n"
+            f"-- Source Definition:\n{definition}"
+        )
+        conversion = None
+        generated_view_ddl = fallback_ddl
+        if lakebridge_service and definition and not definition.startswith("-- Unable"):
+            conversion = lakebridge_service.convert_sql_text(definition, view_name, "view")
+            if conversion.target_definition:
+                generated_view_ddl = conversion.target_definition
+
+        return {
+            "view_name": view_name,
+            "column_count": len(columns),
+            "columns": columns,
+            "sample_rows": sample_data,
+            "definition": definition,
+            "generated_view_ddl": generated_view_ddl,
+            "target_view": f"`{target_db}`.`{target_schema}`.`{view_name.lower()}`",
+            "lakebridge": conversion.__dict__ if conversion else None,
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_procedure_details(proc_name: str, config=None, lakebridge_service=None):
+    """Fetches Snowflake procedure source and uses Lakebridge conversion when available."""
+    config = config or SNOWFLAKE_CONFIG
+    conn = get_snowflake_connection(config)
+    cursor = conn.cursor()
+    database = config.get("database")
+    schema = config.get("schema")
+    try:
+        cursor.execute(
+            "SELECT PROCEDURE_NAME, ARGUMENT_SIGNATURE, DATA_TYPE, PROCEDURE_DEFINITION "
+            "FROM INFORMATION_SCHEMA.PROCEDURES "
+            "WHERE PROCEDURE_CATALOG = %s AND PROCEDURE_SCHEMA = %s AND PROCEDURE_NAME = %s",
+            (database, schema, proc_name),
+        )
+        rows = cursor.fetchall()
+        source_code = rows[0][3] if rows else ""
+        signature = rows[0][1] if rows else ""
+        return_type = rows[0][2] if rows else ""
+        if not source_code:
+            source_code = "-- Snowflake did not return procedure source through INFORMATION_SCHEMA.PROCEDURES."
+
+        fallback = (
+            f"/* Databricks procedural translation recommendation for: {proc_name} */\n"
+            f"-- Source signature: {proc_name}{signature}\n"
+            f"-- Source return type: {return_type}\n"
+            f"-- Review and convert this Snowflake procedure into Databricks SQL scripting, a Python task, or a notebook workflow.\n"
+        )
+        conversion = None
+        recommendation = fallback
+        if lakebridge_service and source_code and not source_code.startswith("-- Snowflake did not"):
+            conversion = lakebridge_service.convert_sql_text(source_code, proc_name, "procedure")
+            if conversion.target_definition:
+                recommendation = conversion.target_definition
+
+        return {
+            "procedure_name": proc_name,
+            "parameter_count": 0,
+            "parameters": [],
+            "source_code": source_code,
+            "recommendation": recommendation,
+            "lakebridge": conversion.__dict__ if conversion else None,
         }
     finally:
         cursor.close()
@@ -232,3 +409,78 @@ def test_snowflake_connection(config=None):
     finally:
         cursor.close()
         conn.close()
+
+
+def dump_snowflake_ddls_to_dir(config=None, output_dir: str = None) -> str:
+    """Exports Snowflake object DDLs (tables, views, procedures) to a local directory.
+
+    Used to prepare a source directory for the Lakebridge ``analyze`` command.
+    If *output_dir* is not supplied, a temporary directory is created; the caller
+    is responsible for cleanup when no longer needed.
+
+    Returns the path of the directory containing the exported ``.sql`` files.
+    """
+    config = config or SNOWFLAKE_CONFIG
+    database = config.get("database")
+    schema = config.get("schema")
+    if not database or not schema:
+        raise ValueError("Snowflake database and schema are required for DDL export.")
+
+    root = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="gmigrate_ddl_"))
+    root.mkdir(parents=True, exist_ok=True)
+
+    conn = get_snowflake_connection(config)
+    cursor = conn.cursor()
+    exported: dict = {"tables": [], "views": [], "procedures": []}
+    try:
+        # ── Tables ────────────────────────────────────────────────────────────
+        cursor.execute(f"SHOW TABLES IN SCHEMA {database}.{schema};")
+        for row in cursor.fetchall():
+            table = row[1]
+            try:
+                cursor.execute(f"SELECT GET_DDL('TABLE', '{database}.{schema}.{table}')")
+                ddl = cursor.fetchone()[0] or ""
+                (root / f"{table.lower()}.sql").write_text(ddl, encoding="utf-8")
+                exported["tables"].append(table)
+            except Exception:
+                pass
+
+        # ── Views ─────────────────────────────────────────────────────────────
+        cursor.execute(f"SHOW VIEWS IN SCHEMA {database}.{schema};")
+        for row in cursor.fetchall():
+            view = row[1]
+            try:
+                cursor.execute(f"SELECT GET_DDL('VIEW', '{database}.{schema}.{view}')")
+                ddl = cursor.fetchone()[0] or ""
+                (root / f"{view.lower()}_view.sql").write_text(ddl, encoding="utf-8")
+                exported["views"].append(view)
+            except Exception:
+                pass
+
+        # ── Procedures ────────────────────────────────────────────────────────
+        cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database}.{schema};")
+        proc_names = [row[1] for row in cursor.fetchall()]
+        for proc in proc_names:
+            try:
+                cursor.execute(
+                    "SELECT PROCEDURE_DEFINITION FROM INFORMATION_SCHEMA.PROCEDURES "
+                    "WHERE PROCEDURE_CATALOG = %s AND PROCEDURE_SCHEMA = %s AND PROCEDURE_NAME = %s",
+                    (database, schema, proc),
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    (root / f"{proc.lower()}_proc.sql").write_text(row[0], encoding="utf-8")
+                    exported["procedures"].append(proc)
+            except Exception:
+                pass
+    finally:
+        cursor.close()
+        conn.close()
+
+    print(
+        f"DDL export complete \u2192 {root}  "
+        f"(tables={len(exported['tables'])}, "
+        f"views={len(exported['views'])}, "
+        f"procedures={len(exported['procedures'])})"
+    )
+    return str(root)

@@ -12,9 +12,11 @@ export interface SnowflakeCredentials {
   snowflake_role?: string;
 }
 
+export type TeradataCredentials = SnowflakeCredentials;
+
 export interface ColumnDetail {
   name: string;
-  snowflake_type: string;
+  source_type: string;
   databricks_type: string;
   nullable: boolean;
   compatibility: 'HIGH' | 'MEDIUM' | 'LOW';
@@ -28,6 +30,38 @@ export interface TableDetails {
   sample_rows: Record<string, string>[];
   generated_ddl: string;
   target_table: string;
+}
+
+export interface ViewDetails {
+  view_name: string;
+  column_count: number;
+  columns: ColumnDetail[];
+  sample_rows: Record<string, string>[];
+  definition: string;
+  generated_view_ddl: string;
+  target_view: string;
+}
+
+export interface ProcedureParameter {
+  name: string;
+  direction: 'IN' | 'OUT' | 'INOUT';
+  source_type: string;
+  databricks_type: string;
+}
+
+export interface ProcedureDetails {
+  procedure_name: string;
+  parameter_count: number;
+  parameters: ProcedureParameter[];
+  source_code: string;
+  recommendation: string;
+}
+
+export interface DiscoveredObjects {
+  database: string;
+  tables: string[];
+  views: string[];
+  procedures: string[];
 }
 
 export interface TableProgress {
@@ -62,7 +96,7 @@ export interface MigrationStatusResponse {
 export interface ValidationTableResult {
   table_name: string;
   target_table: string;
-  snowflake_rows: number;
+  source_rows: number;
   databricks_rows: number;
   difference: number;
   status: 'PASSED' | 'FAILED';
@@ -99,8 +133,8 @@ export interface ConnectionProfile {
 
 export interface ConnectionsStatus {
   snowflake: {
-    user: string;
     account: string;
+    user: string;
     warehouse: string;
     database: string;
     schema: string;
@@ -136,7 +170,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 export const api = {
   // Discovery & Analysis
-  getTables: async (profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<string[]> => {
+  getTables: async (profileId?: string | null, creds?: TeradataCredentials | null): Promise<string[]> => {
     if (creds && creds.snowflake_user) {
       const res = await fetch('/api/connect', {
         method: 'POST',
@@ -153,7 +187,22 @@ export const api = {
     }
   },
 
-  analyzeTable: async (tableName: string, profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<TableDetails> => {
+  getObjects: async (profileId?: string | null, creds?: TeradataCredentials | null): Promise<DiscoveredObjects> => {
+    if (creds && creds.snowflake_user) {
+      const res = await fetch('/api/objects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ creds }),
+      });
+      return handleResponse<DiscoveredObjects>(res);
+    } else {
+      const url = profileId ? `/api/objects?profile_id=${encodeURIComponent(profileId)}` : '/api/objects';
+      const res = await fetch(url);
+      return handleResponse<DiscoveredObjects>(res);
+    }
+  },
+
+  analyzeTable: async (tableName: string, profileId?: string | null, creds?: TeradataCredentials | null): Promise<TableDetails> => {
     const res = await fetch('/api/analyze/table', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -163,8 +212,28 @@ export const api = {
     return data.details;
   },
 
+  analyzeView: async (viewName: string, profileId?: string | null, creds?: TeradataCredentials | null): Promise<ViewDetails> => {
+    const res = await fetch('/api/analyze/view', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ view_name: viewName, profile_id: profileId || null, creds: creds || null }),
+    });
+    const data = await handleResponse<{ details: ViewDetails }>(res);
+    return data.details;
+  },
+
+  analyzeProcedure: async (procName: string, profileId?: string | null, creds?: TeradataCredentials | null): Promise<ProcedureDetails> => {
+    const res = await fetch('/api/analyze/procedure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ procedure_name: procName, profile_id: profileId || null, creds: creds || null }),
+    });
+    const data = await handleResponse<{ details: ProcedureDetails }>(res);
+    return data.details;
+  },
+
   // Migration Execution
-  startMigration: async (selectedTables: string[], profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<{ message: string; job_id: string }> => {
+  startMigration: async (selectedTables: string[], profileId?: string | null, creds?: TeradataCredentials | null): Promise<{ message: string; job_id: string }> => {
     const res = await fetch('/api/migrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -185,7 +254,7 @@ export const api = {
   },
 
   // Validation
-  runValidation: async (tables?: string[], profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<ValidationReport> => {
+  runValidation: async (tables?: string[], profileId?: string | null, creds?: TeradataCredentials | null): Promise<ValidationReport> => {
     const res = await fetch('/api/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -201,7 +270,7 @@ export const api = {
     return handleResponse<ConnectionsStatus>(res);
   },
 
-  testSnowflake: async (creds?: SnowflakeCredentials | null): Promise<any> => {
+  testSnowflake: async (creds?: TeradataCredentials | null): Promise<any> => {
     const res = await fetch('/api/connections/test-snowflake', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -210,7 +279,7 @@ export const api = {
     return handleResponse<any>(res);
   },
 
-  testDatabricks: async (creds?: SnowflakeCredentials | null): Promise<any> => {
+  testDatabricks: async (creds?: TeradataCredentials | null): Promise<any> => {
     const res = await fetch('/api/connections/test-databricks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -250,4 +319,3 @@ export const api = {
     return handleResponse<any>(res);
   },
 };
-

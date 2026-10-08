@@ -175,7 +175,7 @@ export default function ValidatePage() {
                       {t.target_table}
                     </td>
                     <td className="p-3 text-slate-200">
-                      {t.snowflake_rows >= 0 ? t.snowflake_rows.toLocaleString() : 'Error'}
+                      {t.source_rows >= 0 ? t.source_rows.toLocaleString() : 'Error'}
                     </td>
                     <td className="p-3 text-sky-400 font-semibold">
                       {t.databricks_rows >= 0 ? t.databricks_rows.toLocaleString() : 'Error'}

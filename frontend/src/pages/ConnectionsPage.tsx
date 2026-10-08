@@ -19,9 +19,9 @@ export default function ConnectionsPage() {
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: '',
+    snowflake_account: '',
     snowflake_user: '',
     snowflake_password: '',
-    snowflake_account: '',
     snowflake_warehouse: '',
     snowflake_database: '',
     snowflake_schema: '',
@@ -54,9 +54,9 @@ export default function ConnectionsPage() {
     setEditingProfileId(null);
     setFormData({
       name: '',
+      snowflake_account: '',
       snowflake_user: '',
       snowflake_password: '',
-      snowflake_account: '',
       snowflake_warehouse: '',
       snowflake_database: '',
       snowflake_schema: '',
@@ -70,9 +70,9 @@ export default function ConnectionsPage() {
     setEditingProfileId(p.id);
     setFormData({
       name: p.name,
+      snowflake_account: p.snowflake_account,
       snowflake_user: p.snowflake_user,
       snowflake_password: '',
-      snowflake_account: p.snowflake_account,
       snowflake_warehouse: p.snowflake_warehouse,
       snowflake_database: p.snowflake_database,
       snowflake_schema: p.snowflake_schema,
@@ -90,9 +90,9 @@ export default function ConnectionsPage() {
       await saveProfile({
         id: editingProfileId || undefined,
         name: formData.name || `${formData.snowflake_database}.${formData.snowflake_schema}`,
+        snowflake_account: formData.snowflake_account,
         snowflake_user: formData.snowflake_user,
         snowflake_password: formData.snowflake_password,
-        snowflake_account: formData.snowflake_account,
         snowflake_warehouse: formData.snowflake_warehouse,
         snowflake_database: formData.snowflake_database,
         snowflake_schema: formData.snowflake_schema,
@@ -107,7 +107,7 @@ export default function ConnectionsPage() {
   };
 
   const handleDeleteProfile = async (id: string) => {
-    if (confirm('Are you sure you want to delete this saved Snowflake connection?')) {
+    if (confirm('Are you sure you want to delete this saved Teradata connection?')) {
       try {
         await deleteProfile(id);
       } catch (err: any) {
@@ -161,7 +161,7 @@ export default function ConnectionsPage() {
         <div>
           <h2 className="text-xl font-bold tracking-tight text-slate-100">Connection Profiles</h2>
           <p className="text-xs text-slate-400 mt-1">
-            Manage, save, and switch between multiple Snowflake source environments and verify Databricks Unity Catalog.
+            Manage, save, and switch between multiple Teradata source environments and verify Databricks Unity Catalog.
           </p>
         </div>
 
@@ -169,15 +169,15 @@ export default function ConnectionsPage() {
           onClick={openAddModal}
           className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-blue-500/20 transition-all flex items-center space-x-1.5"
         >
-          <span>+ Add Snowflake Connection</span>
+          <span>+ Add Teradata Connection</span>
         </button>
       </div>
 
-      {/* Saved Snowflake Connection Profiles */}
+      {/* Saved Teradata Connection Profiles */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-            Saved Snowflake Sources ({profiles.length})
+            Saved Teradata Sources ({profiles.length})
           </h3>
           <button
             onClick={() => refreshProfiles()}
@@ -205,8 +205,8 @@ export default function ConnectionsPage() {
                 {/* Top Title & Status */}
                 <div className="flex items-start justify-between">
                   <div className="flex items-center space-x-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 font-bold">
-                      ❄
+                    <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 font-bold text-sm">
+                      TD
                     </div>
                     <div>
                       <h4 className="font-bold text-sm text-slate-100 font-mono">{p.name}</h4>
@@ -233,7 +233,7 @@ export default function ConnectionsPage() {
                 {/* Details list */}
                 <div className="bg-[#0c0e14] border border-[#1e2230] rounded-lg p-3 grid grid-cols-2 gap-2 text-xs font-mono">
                   <div>
-                    <span className="text-slate-500 block text-[10px]">ACCOUNT</span>
+                    <span className="text-slate-500 block text-[10px]">HOST</span>
                     <span className="text-slate-300 truncate block">{p.snowflake_account || '—'}</span>
                   </div>
                   <div>
@@ -241,12 +241,12 @@ export default function ConnectionsPage() {
                     <span className="text-slate-300 truncate block">{p.snowflake_user || '—'}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block text-[10px]">WAREHOUSE</span>
-                    <span className="text-slate-300 truncate block">{p.snowflake_warehouse || '—'}</span>
+                    <span className="text-slate-500 block text-[10px]">DATABASE</span>
+                    <span className="text-slate-300 truncate block">{p.snowflake_database || '—'}</span>
                   </div>
                   <div>
-                    <span className="text-slate-500 block text-[10px]">ROLE</span>
-                    <span className="text-slate-300 truncate block">{p.snowflake_role || 'DEFAULT'}</span>
+                    <span className="text-slate-500 block text-[10px]">LOGMECH</span>
+                    <span className="text-slate-300 truncate block">{p.snowflake_warehouse || '—'}</span>
                   </div>
                 </div>
 
@@ -391,7 +391,7 @@ export default function ConnectionsPage() {
           <div className="bg-[#12151f] border border-[#252a3a] rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl">
             <div className="flex justify-between items-center pb-3 border-b border-[#1e2230]">
               <h3 className="font-bold text-base text-white">
-                {editingProfileId ? 'Edit Snowflake Connection' : 'Add New Snowflake Connection Profile'}
+                {editingProfileId ? 'Edit Teradata Connection' : 'Add New Teradata Connection Profile'}
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
@@ -422,17 +422,31 @@ export default function ConnectionsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Snowflake User</label>
+                  <label className="block text-slate-300 font-semibold mb-1">Host / IP</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g., EGLOBAL1008"
+                    placeholder="e.g., 192.168.1.100 or td.company.com"
+                    value={formData.snowflake_account}
+                    onChange={(e) => setFormData({ ...formData, snowflake_account: e.target.value })}
+                    className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Username</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g., dbc"
                     value={formData.snowflake_user}
                     onChange={(e) => setFormData({ ...formData, snowflake_user: e.target.value })}
                     className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
                   />
                 </div>
+              </div>
 
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
                     Password {editingProfileId ? '(Leave blank to keep current)' : ''}
@@ -446,35 +460,7 @@ export default function ConnectionsPage() {
                     className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Account Identifier</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g., EZXHWVO-SM43903"
-                    value={formData.snowflake_account}
-                    onChange={(e) => setFormData({ ...formData, snowflake_account: e.target.value })}
-                    className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Warehouse</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g., COMPUTE_WH"
-                    value={formData.snowflake_warehouse}
-                    onChange={(e) => setFormData({ ...formData, snowflake_warehouse: e.target.value })}
-                    className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Database</label>
                   <input
@@ -486,29 +472,20 @@ export default function ConnectionsPage() {
                     className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Schema</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g., SOURCE_DATA"
-                    value={formData.snowflake_schema}
-                    onChange={(e) => setFormData({ ...formData, snowflake_schema: e.target.value })}
-                    className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Role (Optional)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g., ACCOUNTADMIN"
-                    value={formData.snowflake_role}
-                    onChange={(e) => setFormData({ ...formData, snowflake_role: e.target.value })}
-                    className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Logon Mechanism (LOGMECH)</label>
+                <select
+                  value={formData.snowflake_schema}
+                  onChange={(e) => setFormData({ ...formData, snowflake_schema: e.target.value })}
+                  className="w-full bg-[#0c0e14] border border-[#252a3a] rounded-lg p-2.5 text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+                >
+                  <option value="TD2">TD2 (Teradata default)</option>
+                  <option value="LDAP">LDAP</option>
+                  <option value="KRB5">Kerberos (KRB5)</option>
+                  <option value="TDNEGO">TDNEGO (auto-negotiate)</option>
+                </select>
               </div>
 
               <div className="flex justify-end space-x-3 pt-3 border-t border-[#1e2230]">

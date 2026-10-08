@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from pathlib import Path
 import time
 import uuid
@@ -12,9 +13,13 @@ from databricks.sdk import WorkspaceClient
 
 from .migration_engine.snowflake_client import (
     discover_snowflake_tables,
+    discover_snowflake_all_objects,
     extract_and_stage_parquet,
     get_table_details,
+    get_view_details,
+    get_procedure_details,
     test_snowflake_connection,
+    dump_snowflake_ddls_to_dir,
 )
 from .migration_engine.databricks_client import (
     ensure_unity_catalog_hierarchy,
@@ -38,6 +43,7 @@ from .migration_engine.config import (
     LOCAL_DEV_USER_EMAIL,
     LOCAL_DEV_DISPLAY_NAME,
 )
+from .migration_engine.lakebridge import LakebridgeService
 
 from .migration_engine.connection_store import (
     load_saved_profiles,
@@ -89,46 +95,66 @@ class AnalyzeTableRequest(BaseModel):
     creds: Optional[CredentialsRequest] = None
     profile_id: Optional[str] = None
 
+class AnalyzeViewRequest(BaseModel):
+    view_name: str
+    creds: Optional[CredentialsRequest] = None
+    profile_id: Optional[str] = None
+
+class AnalyzeProcedureRequest(BaseModel):
+    procedure_name: str
+    creds: Optional[CredentialsRequest] = None
+    profile_id: Optional[str] = None
+
 class ValidateRequest(BaseModel):
     tables: Optional[List[str]] = None
     creds: Optional[CredentialsRequest] = None
     profile_id: Optional[str] = None
 
+
+class LakebridgeAssessRequest(BaseModel):
+    """Request body for the Lakebridge assess endpoint.
+
+    If *source_directory* is omitted, DDLs are automatically exported from the
+    configured Snowflake database/schema before the Lakebridge analysis runs.
+    """
+    source_directory: Optional[str] = None
+    report_file: Optional[str] = None
+    source_tech: str = "snowflake"
+    profile_id: Optional[str] = None
+    creds: Optional[CredentialsRequest] = None
+
+
 def resolve_snowflake_config(creds: Optional[CredentialsRequest] = None, profile_id: Optional[str] = None) -> Dict[str, Any]:
-    """Resolves Snowflake configuration strictly from an explicit profile or credentials."""
+    """Resolves Snowflake configuration from explicit credentials, a saved profile, or backend/.env."""
     if creds and creds.snowflake_user:
         return build_snowflake_config(creds)
     if profile_id:
         p = get_profile_by_id(profile_id)
-        if p:
-            cfg = {
+        if p and p.get("snowflake_user"):
+            return {
                 "user": p["snowflake_user"],
                 "password": p["snowflake_password"],
                 "account": p["snowflake_account"],
                 "warehouse": p["snowflake_warehouse"],
                 "database": p["snowflake_database"],
                 "schema": p["snowflake_schema"],
+                "role": p.get("snowflake_role") or None,
             }
-            if p.get("snowflake_role"):
-                cfg["role"] = p["snowflake_role"]
-            return cfg
     # Fallback to first saved profile in connection store
     profiles = load_saved_profiles()
-    if profiles:
-        active = profiles[0]
-        cfg = {
+    active = next((p for p in profiles if p.get("snowflake_user")), None)
+    if active:
+        return {
             "user": active["snowflake_user"],
             "password": active["snowflake_password"],
             "account": active["snowflake_account"],
             "warehouse": active["snowflake_warehouse"],
             "database": active["snowflake_database"],
             "schema": active["snowflake_schema"],
+            "role": active.get("snowflake_role") or None,
         }
-        if active.get("snowflake_role"):
-            cfg["role"] = active["snowflake_role"]
-        return cfg
 
-    raise ValueError("No Snowflake connection profile found. Please add or select a Snowflake connection profile.")
+    return build_snowflake_config()
 
 # ─── In-Memory State ──────────────────────────────────────────────────────────
 
@@ -191,13 +217,13 @@ async def get_identity(request: Request):
 async def get_connections_status():
     """Returns current configured connection details (without sensitive passwords)."""
     sf_cfg = {
-        "user": SNOWFLAKE_CONFIG.get("user") or "",
         "account": SNOWFLAKE_CONFIG.get("account") or "",
+        "user": SNOWFLAKE_CONFIG.get("user") or "",
         "warehouse": SNOWFLAKE_CONFIG.get("warehouse") or "",
         "database": SNOWFLAKE_CONFIG.get("database") or "",
         "schema": SNOWFLAKE_CONFIG.get("schema") or "",
         "role": SNOWFLAKE_CONFIG.get("role") or "",
-        "configured": bool(SNOWFLAKE_CONFIG.get("user") and SNOWFLAKE_CONFIG.get("account")),
+        "configured": bool(SNOWFLAKE_CONFIG.get("account") and SNOWFLAKE_CONFIG.get("user")),
     }
     dbx_cfg = {
         "warehouse_id": DATABRICKS_WAREHOUSE_ID or "",
@@ -210,6 +236,7 @@ async def get_connections_status():
     return {
         "snowflake": sf_cfg,
         "databricks": dbx_cfg,
+        "lakebridge": LakebridgeService().status(),
         "environment": ENVIRONMENT,
     }
 
@@ -219,6 +246,47 @@ async def api_test_snowflake(creds: Optional[CredentialsRequest] = None):
         config = build_snowflake_config(creds)
         result = test_snowflake_connection(config)
         return {"status": "success", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/lakebridge/status")
+async def api_lakebridge_status():
+    return LakebridgeService().status()
+
+
+@app.post("/api/lakebridge/assess")
+async def api_lakebridge_assess(req: Optional[LakebridgeAssessRequest] = None):
+    """Runs Lakebridge analysis on a directory of SQL sources.
+
+    If *source_directory* is not supplied the endpoint automatically exports DDLs
+    from the configured Snowflake database/schema and passes them to Lakebridge.
+    """
+    try:
+        req = req or LakebridgeAssessRequest()
+        svc = LakebridgeService()
+        av = svc.status()
+        if not av.get("available"):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Lakebridge is not available: {av.get('reason', 'Check LAKEBRIDGE_ENABLED and LAKEBRIDGE_PATH.')}",
+            )
+        source_dir = req.source_directory
+        if not source_dir:
+            sf_config = resolve_snowflake_config(creds=req.creds, profile_id=req.profile_id)
+            append_log(
+                f"Exporting Snowflake DDLs from "
+                f"{sf_config.get('database')}.{sf_config.get('schema')} for Lakebridge assessment..."
+            )
+            source_dir = dump_snowflake_ddls_to_dir(sf_config)
+            append_log(f"DDLs written to: {source_dir}")
+        report_file = req.report_file or str(Path(source_dir) / "lakebridge_report.xlsx")
+        append_log(f"Running Lakebridge assess on: {source_dir}")
+        result = svc.assess_directory(source_dir, report_file, req.source_tech)
+        level = "INFO" if result.status in ("SUCCEEDED", "SKIPPED") else "WARN"
+        append_log(f"Lakebridge assessment status={result.status}", level=level)
+        return {"status": "success", "result": asdict(result)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -241,8 +309,8 @@ async def api_test_databricks(creds: Optional[CredentialsRequest] = None):
                 "status": "connected",
                 "latency_ms": latency_ms,
                 "warehouse_id": dbx_config["warehouse_id"],
-                "state": state
-            }
+                "state": state,
+            },
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -252,13 +320,13 @@ async def api_test_databricks(creds: Optional[CredentialsRequest] = None):
 @app.get("/api/connections/profiles")
 async def get_saved_profiles():
     """Returns all saved Snowflake connection profiles."""
-    profiles = load_saved_profiles(SNOWFLAKE_CONFIG)
+    profiles = load_saved_profiles()
     # Mask passwords for UI security
     safe_profiles = []
     for p in profiles:
         cp = dict(p)
         cp["has_password"] = bool(cp.get("snowflake_password"))
-        cp["snowflake_password"] = "••••••••" if cp["has_password"] else ""
+        cp["snowflake_password"] = "********" if cp["has_password"] else ""
         safe_profiles.append(cp)
     return {"profiles": safe_profiles}
 
@@ -266,7 +334,7 @@ async def get_saved_profiles():
 async def save_profile(req: SavedProfileRequest):
     """Creates or updates a saved Snowflake connection profile."""
     try:
-        saved = create_or_update_profile(req.dict())
+        saved = create_or_update_profile(req.model_dump())
         return {"status": "success", "profile": saved}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -275,7 +343,7 @@ async def save_profile(req: SavedProfileRequest):
 async def update_profile(profile_id: str, req: SavedProfileRequest):
     """Updates an existing connection profile."""
     try:
-        data = req.dict()
+        data = req.model_dump()
         data["id"] = profile_id
         saved = create_or_update_profile(data)
         return {"status": "success", "profile": saved}
@@ -295,7 +363,7 @@ async def remove_profile(profile_id: str):
 @app.post("/api/connections/profiles/{profile_id}/test")
 async def test_saved_profile(profile_id: str):
     """Tests connection for a specific saved profile."""
-    profiles = load_saved_profiles(SNOWFLAKE_CONFIG)
+    profiles = load_saved_profiles()
     profile = next((p for p in profiles if p.get("id") == profile_id), None)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -307,9 +375,8 @@ async def test_saved_profile(profile_id: str):
             "warehouse": profile["snowflake_warehouse"],
             "database": profile["snowflake_database"],
             "schema": profile["snowflake_schema"],
+            "role": profile.get("snowflake_role") or None,
         }
-        if profile.get("snowflake_role"):
-            config["role"] = profile["snowflake_role"]
         result = test_snowflake_connection(config)
         return {"status": "success", "result": result}
     except Exception as e:
@@ -344,11 +411,45 @@ async def post_tables(req: Optional[AnalyzeTableRequest] = None):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/objects")
+async def get_all_objects(profile_id: Optional[str] = None):
+    try:
+        config = resolve_snowflake_config(profile_id=profile_id)
+        return discover_snowflake_all_objects(config)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/objects")
+async def post_all_objects(req: Optional[AnalyzeTableRequest] = None):
+    try:
+        config = resolve_snowflake_config(creds=req.creds if req else None, profile_id=req.profile_id if req else None)
+        return discover_snowflake_all_objects(config)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.post("/api/analyze/table")
 async def api_analyze_table(req: AnalyzeTableRequest):
     try:
         config = resolve_snowflake_config(creds=req.creds, profile_id=req.profile_id)
-        details = get_table_details(req.table_name, config)
+        details = get_table_details(req.table_name, config, lakebridge_service=LakebridgeService())
+        return {"status": "success", "details": details}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/analyze/view")
+async def api_analyze_view(req: AnalyzeViewRequest):
+    try:
+        config = resolve_snowflake_config(creds=req.creds, profile_id=req.profile_id)
+        details = get_view_details(req.view_name, config, lakebridge_service=LakebridgeService())
+        return {"status": "success", "details": details}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/analyze/procedure")
+async def api_analyze_procedure(req: AnalyzeProcedureRequest):
+    try:
+        config = resolve_snowflake_config(creds=req.creds, profile_id=req.profile_id)
+        details = get_procedure_details(req.procedure_name, config, lakebridge_service=LakebridgeService())
         return {"status": "success", "details": details}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -381,6 +482,7 @@ async def start_migration(req: MigrationRequest, background_tasks: BackgroundTas
     background_tasks.add_task(run_migration_task, job_id, req.selected_tables, req.creds, req.profile_id)
     return {"message": "Migration started", "job_id": job_id, "status_url": "/api/status"}
 
+
 def run_migration_task(job_id: str, selected_tables: List[str], creds: Optional[CredentialsRequest] = None, profile_id: Optional[str] = None):
     start_ts = time.time()
     try:
@@ -406,7 +508,7 @@ def run_migration_task(job_id: str, selected_tables: List[str], creds: Optional[
             t_start = time.time()
             t_entry = migration_status["table_progress"][table_name]
             t_entry["status"] = "IN_PROGRESS"
-            
+
             # Step 1: Extract Parquet
             migration_status["stage"] = f"EXTRACTING ({table_name})"
             t_entry["stage"] = "EXTRACTING"
@@ -454,6 +556,7 @@ def run_migration_task(job_id: str, selected_tables: List[str], creds: Optional[
         if len(migration_history) > 50:
             migration_history.pop()
 
+
 @app.get("/api/status")
 async def get_status():
     if migration_status["status"] == "RUNNING" and migration_status.get("start_time"):
@@ -493,4 +596,3 @@ async def api_validate_tables(req: ValidateRequest):
 static_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if static_dir.exists():
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
-

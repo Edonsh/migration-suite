@@ -1,23 +1,26 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { api, type SnowflakeCredentials, type MigrationStatusResponse, type ConnectionProfile } from '@/lib/api';
+import { api, type TeradataCredentials, type MigrationStatusResponse, type ConnectionProfile } from '@/lib/api';
 
 interface MigrationContextType {
   tables: string[];
+  views: string[];
+  procedures: string[];
   selectedTables: string[];
   loadingTables: boolean;
   tableError: string | null;
-  creds: SnowflakeCredentials;
+  creds: TeradataCredentials;
   status: MigrationStatusResponse | null;
   history: MigrationStatusResponse[];
   profiles: ConnectionProfile[];
   activeProfileId: string | null;
   activeProfile: ConnectionProfile | null;
-  setCreds: React.Dispatch<React.SetStateAction<SnowflakeCredentials>>;
+  setCreds: React.Dispatch<React.SetStateAction<TeradataCredentials>>;
   setSelectedTables: React.Dispatch<React.SetStateAction<string[]>>;
   toggleTable: (table: string) => void;
   selectAllTables: () => void;
   clearSelectedTables: () => void;
   fetchTables: (targetProfileId?: string | null) => Promise<void>;
+  fetchObjects: (targetProfileId?: string | null) => Promise<void>;
   fetchHistory: () => Promise<void>;
   refreshProfiles: () => Promise<ConnectionProfile[]>;
   selectProfile: (profileId: string) => void;
@@ -25,7 +28,7 @@ interface MigrationContextType {
   deleteProfile: (profileId: string) => Promise<void>;
 }
 
-const defaultCreds: SnowflakeCredentials = {
+const defaultCreds: TeradataCredentials = {
   snowflake_user: '',
   snowflake_password: '',
   snowflake_account: '',
@@ -39,15 +42,17 @@ const MigrationContext = createContext<MigrationContextType | null>(null);
 
 export function MigrationProvider({ children }: { children: ReactNode }) {
   const [tables, setTables] = useState<string[]>([]);
+  const [views, setViews] = useState<string[]>([]);
+  const [procedures, setProcedures] = useState<string[]>([]);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [loadingTables, setLoadingTables] = useState(false);
   const [tableError, setTableError] = useState<string | null>(null);
-  const [creds, setCreds] = useState<SnowflakeCredentials>(defaultCreds);
+  const [creds, setCreds] = useState<TeradataCredentials>(defaultCreds);
   const [status, setStatus] = useState<MigrationStatusResponse | null>(null);
   const [history, setHistory] = useState<MigrationStatusResponse[]>([]);
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(() => {
-    return localStorage.getItem('active_snowflake_profile_id') || null;
+    return localStorage.getItem('active_snowflake_profile_id') || localStorage.getItem('active_teradata_profile_id') || null;
   });
 
   const activeProfile = profiles.find((p) => p.id === activeProfileId) || (profiles.length > 0 ? profiles[0] : null);
@@ -105,28 +110,38 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const fetchTables = async (targetProfileId?: string | null) => {
+  const fetchObjects = async (targetProfileId?: string | null) => {
     const pid = targetProfileId !== undefined ? targetProfileId : (activeProfile?.id || activeProfileId);
     if (!pid && (!creds || !creds.snowflake_user)) {
       setTables([]);
+      setViews([]);
+      setProcedures([]);
       return;
     }
     setLoadingTables(true);
     setTableError(null);
     try {
-      const result = await api.getTables(pid, creds.snowflake_user ? creds : null);
-      setTables(result);
-      if (result.length > 0) {
-        setSelectedTables(result);
+      const result = await api.getObjects(pid, creds.snowflake_user ? creds : null);
+      setTables(result.tables || []);
+      setViews(result.views || []);
+      setProcedures(result.procedures || []);
+      if (result.tables && result.tables.length > 0) {
+        setSelectedTables(result.tables);
       } else {
         setSelectedTables([]);
       }
     } catch (err: any) {
-      setTableError(err.message || 'Failed to discover tables for selected connection');
+      setTableError(err.message || 'Failed to discover objects for selected connection');
       setTables([]);
+      setViews([]);
+      setProcedures([]);
     } finally {
       setLoadingTables(false);
     }
+  };
+
+  const fetchTables = async (targetProfileId?: string | null) => {
+    return fetchObjects(targetProfileId);
   };
 
   const fetchHistory = async () => {
@@ -157,16 +172,16 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
     refreshProfiles().then((list) => {
       if (list.length > 0) {
         const currentId = localStorage.getItem('active_snowflake_profile_id') || list[0].id;
-        fetchTables(currentId);
+        fetchObjects(currentId);
       }
     });
     fetchHistory();
   }, []);
 
-  // Fetch tables when active profile changes
+  // Fetch objects when active profile changes
   useEffect(() => {
     if (activeProfileId) {
-      fetchTables(activeProfileId);
+      fetchObjects(activeProfileId);
     }
   }, [activeProfileId]);
 
@@ -194,6 +209,8 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
     <MigrationContext.Provider
       value={{
         tables,
+        views,
+        procedures,
         selectedTables,
         loadingTables,
         tableError,
@@ -209,6 +226,7 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
         selectAllTables,
         clearSelectedTables,
         fetchTables,
+        fetchObjects,
         fetchHistory,
         refreshProfiles,
         selectProfile,
