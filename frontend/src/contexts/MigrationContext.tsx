@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { api, type TeradataCredentials, type MigrationStatusResponse, type ConnectionProfile } from '@/lib/api';
+import { api, type SnowflakeCredentials, type MigrationStatusResponse, type ConnectionProfile } from '@/lib/api';
 
 interface MigrationContextType {
   tables: string[];
@@ -8,13 +8,13 @@ interface MigrationContextType {
   selectedTables: string[];
   loadingTables: boolean;
   tableError: string | null;
-  creds: TeradataCredentials;
+  creds: SnowflakeCredentials;
   status: MigrationStatusResponse | null;
   history: MigrationStatusResponse[];
   profiles: ConnectionProfile[];
   activeProfileId: string | null;
   activeProfile: ConnectionProfile | null;
-  setCreds: React.Dispatch<React.SetStateAction<TeradataCredentials>>;
+  setCreds: React.Dispatch<React.SetStateAction<SnowflakeCredentials>>;
   setSelectedTables: React.Dispatch<React.SetStateAction<string[]>>;
   toggleTable: (table: string) => void;
   selectAllTables: () => void;
@@ -28,7 +28,7 @@ interface MigrationContextType {
   deleteProfile: (profileId: string) => Promise<void>;
 }
 
-const defaultCreds: TeradataCredentials = {
+const defaultCreds: SnowflakeCredentials = {
   snowflake_user: '',
   snowflake_password: '',
   snowflake_account: '',
@@ -47,19 +47,21 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [loadingTables, setLoadingTables] = useState(false);
   const [tableError, setTableError] = useState<string | null>(null);
-  const [creds, setCreds] = useState<TeradataCredentials>(defaultCreds);
+  const [creds, setCreds] = useState<SnowflakeCredentials>(defaultCreds);
   const [status, setStatus] = useState<MigrationStatusResponse | null>(null);
   const [history, setHistory] = useState<MigrationStatusResponse[]>([]);
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(() => {
-    return localStorage.getItem('active_snowflake_profile_id') || localStorage.getItem('active_teradata_profile_id') || null;
+    return localStorage.getItem('active_snowflake_profile_id');
   });
 
   const activeProfile = profiles.find((p) => p.id === activeProfileId) || (profiles.length > 0 ? profiles[0] : null);
 
   const refreshProfiles = async (): Promise<ConnectionProfile[]> => {
     try {
-      const list = await api.getProfiles();
+      const list = (await api.getProfiles()).filter((profile) =>
+        profile.snowflake_user && profile.snowflake_account && profile.snowflake_database && profile.snowflake_schema,
+      );
       setProfiles(list);
       if (list.length > 0) {
         if (!activeProfileId || !list.some((p) => p.id === activeProfileId)) {

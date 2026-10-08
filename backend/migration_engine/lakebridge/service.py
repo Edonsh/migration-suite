@@ -67,7 +67,7 @@ class LakebridgeService:
             "--generate-json",
             "true",
         ]
-        cmd_result = self.client.run(args)
+        cmd_result = self.client.run(args, check=False)
         json_report = str(Path(report_file).with_suffix(".json"))
         raw = {}
         if Path(json_report).exists():
@@ -78,8 +78,9 @@ class LakebridgeService:
         migration_result = MigrationResult(
             source_object=source_directory,
             object_type="assessment",
-            status="SUCCEEDED",
-            lakebridge_used=True,
+            status="SUCCEEDED" if cmd_result.returncode == 0 else "FAILED",
+            lakebridge_used=cmd_result.returncode == 0,
+            errors=[] if cmd_result.returncode == 0 else [cmd_result.stderr or cmd_result.stdout or "Lakebridge assessment failed."],
             warnings=[],
             output_location=report_file,
             raw={"stdout": cmd_result.stdout, "stderr": cmd_result.stderr, "json_report": raw},
@@ -126,12 +127,12 @@ class LakebridgeService:
             migration_result = MigrationResult(
                 source_object=source_object,
                 object_type=object_type,
-                status="SUCCEEDED" if converted else "FAILED",
+                status="SUCCEEDED" if converted and cmd_result.returncode == 0 else "FAILED",
                 source_definition=sql_text,
                 target_definition=converted,
-                lakebridge_used=bool(converted),
-                warnings=[] if converted else ["Lakebridge completed but no SQL output file was produced."],
-                errors=[] if converted else [cmd_result.stderr or cmd_result.stdout or "Missing converted SQL output."],
+                lakebridge_used=bool(converted and cmd_result.returncode == 0),
+                warnings=[] if converted and cmd_result.returncode == 0 else [],
+                errors=[] if converted and cmd_result.returncode == 0 else [cmd_result.stderr or cmd_result.stdout or "Lakebridge failed or produced no SQL output."],
                 output_location=str(output_dir),
                 raw={"stdout": cmd_result.stdout, "stderr": cmd_result.stderr},
             )

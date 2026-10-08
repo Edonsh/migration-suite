@@ -57,14 +57,6 @@ def get_env_or_secret(name, secret_scope=None):
     return None
 
 
-TERADATA_CONFIG = {
-    "host": get_env_or_secret("TD_HOST", DATABRICKS_SECRET_SCOPE),
-    "user": get_env_or_secret("TD_USER", DATABRICKS_SECRET_SCOPE),
-    "password": get_env_or_secret("TD_PASSWORD", DATABRICKS_SECRET_SCOPE),
-    "database": get_env_or_secret("TD_DATABASE", DATABRICKS_SECRET_SCOPE),
-    "logmech": get_env_or_secret("TD_LOGMECH", DATABRICKS_SECRET_SCOPE) or "TD2",
-}
-
 SNOWFLAKE_CONFIG = {
     "user": get_env_or_secret("SNOWFLAKE_USER", DATABRICKS_SECRET_SCOPE),
     "password": get_env_or_secret("SNOWFLAKE_PASSWORD", DATABRICKS_SECRET_SCOPE),
@@ -84,21 +76,10 @@ LAKEBRIDGE_TIMEOUT_SECONDS = int(os.environ.get("LAKEBRIDGE_TIMEOUT_SECONDS", "3
 
 DATABRICKS_WAREHOUSE_ID = get_databricks_warehouse_id() or get_env_or_secret("DATABRICKS_WAREHOUSE_ID", DATABRICKS_SECRET_SCOPE)
 
-VOLUME_CATALOG = "migration_db"
-VOLUME_SCHEMA = "source_data"
-VOLUME_NAME = "staging_volume"
+VOLUME_CATALOG = os.environ.get("DATABRICKS_TARGET_CATALOG") or get_env_or_secret("DATABRICKS_TARGET_CATALOG", DATABRICKS_SECRET_SCOPE) or "migration_db"
+VOLUME_SCHEMA = os.environ.get("DATABRICKS_TARGET_SCHEMA") or get_env_or_secret("DATABRICKS_TARGET_SCHEMA", DATABRICKS_SECRET_SCOPE) or "source_data"
+VOLUME_NAME = os.environ.get("DATABRICKS_STAGING_VOLUME") or get_env_or_secret("DATABRICKS_STAGING_VOLUME", DATABRICKS_SECRET_SCOPE) or "staging_volume"
 STAGING_VOLUME_PATH = f"/Volumes/{VOLUME_CATALOG}/{VOLUME_SCHEMA}/{VOLUME_NAME}"
-
-def validate_teradata_env_vars():
-    required_keys = [
-        ("TD_HOST", TERADATA_CONFIG["host"]),
-        ("TD_USER", TERADATA_CONFIG["user"]),
-        ("TD_PASSWORD", TERADATA_CONFIG["password"]),
-        ("TD_DATABASE", TERADATA_CONFIG["database"]),
-    ]
-    missing = [key for key, val in required_keys if not val]
-    if missing:
-        raise ValueError(f"Missing Teradata app environment variables: {', '.join(missing)}")
 
 def validate_snowflake_env_vars():
     required_keys = [
@@ -123,21 +104,6 @@ def validate_databricks_env_vars():
 def validate_env_vars():
     validate_snowflake_env_vars()
     validate_databricks_env_vars()
-
-def build_teradata_config(creds=None):
-    if not creds:
-        validate_teradata_env_vars()
-        return TERADATA_CONFIG
-
-    config = {
-        **TERADATA_CONFIG,
-        "host": creds.teradata_host,
-        "user": creds.teradata_user,
-        "password": creds.teradata_password,
-        "database": creds.teradata_database,
-        "logmech": creds.teradata_logmech or "TD2",
-    }
-    return {key: value for key, value in config.items() if value}
 
 def build_snowflake_config(creds=None):
     if not creds:

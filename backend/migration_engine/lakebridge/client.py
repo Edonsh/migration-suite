@@ -82,6 +82,7 @@ class LakebridgeClient:
             capture_output=True,
             text=True,
             timeout=timeout_seconds or self.config.timeout_seconds,
+            stdin=subprocess.DEVNULL,
             env=env,
             check=False,
         )

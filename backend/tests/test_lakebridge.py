@@ -170,6 +170,44 @@ class TestAvailability:
         result = svc.convert_sql_text(sql, "MY_V", "view")
         assert result.source_definition == sql
 
+    def test_assessment_reports_cli_failure(self, tmp_path):
+        from backend.migration_engine.lakebridge.config import LakebridgeConfig
+        from backend.migration_engine.lakebridge.models import LakebridgeAvailability, LakebridgeCommandResult
+        from backend.migration_engine.lakebridge.service import LakebridgeService
+
+        class FailedClient:
+            def availability(self):
+                return LakebridgeAvailability(enabled=True, available=True)
+
+            def run(self, args, **kwargs):
+                return LakebridgeCommandResult(command=list(args), returncode=2, stderr="assessment failed")
+
+        result = LakebridgeService(config=LakebridgeConfig(enabled=True), client=FailedClient()).assess_directory(
+            str(tmp_path), str(tmp_path / "report.xlsx")
+        )
+        assert result.status == "FAILED"
+        assert result.lakebridge_used is False
+        assert "assessment failed" in result.errors[0]
+
+    def test_transpile_reports_cli_failure_without_output(self):
+        from backend.migration_engine.lakebridge.config import LakebridgeConfig
+        from backend.migration_engine.lakebridge.models import LakebridgeAvailability, LakebridgeCommandResult
+        from backend.migration_engine.lakebridge.service import LakebridgeService
+
+        class FailedClient:
+            def availability(self):
+                return LakebridgeAvailability(enabled=True, available=True)
+
+            def run(self, args, **kwargs):
+                return LakebridgeCommandResult(command=list(args), returncode=2, stderr="transpile failed")
+
+        result = LakebridgeService(config=LakebridgeConfig(enabled=True), client=FailedClient()).convert_sql_text(
+            "CREATE VIEW v AS SELECT 1", "v", "view"
+        )
+        assert result.status == "FAILED"
+        assert result.lakebridge_used is False
+        assert "transpile failed" in result.errors[0]
+
 
 # ---------- unit: MigrationResult contract ------------------------------------
 
@@ -263,132 +301,6 @@ class TestLakebridgeCLI:
         from backend.migration_engine.lakebridge.client import LakebridgeClient
         av = LakebridgeClient().availability()
         assert av.version is not None, f"version is None — check _detect_version fix. av={av}"
-
-
-# ---------- integration: view conversion --------------------------------------
-
-@pytest.mark.integration
-class TestViewConversion:
-
-    def test_view_ddl_fetched(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        from backend.migration_engine.snowflake_client import get_view_details
-        d = get_view_details("CUSTOMER_ORDERS", config)
-        assert d["definition"]
-
-    def test_view_converted_via_lakebridge(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        if not _lakebridge_available():
-            pytest.skip("Lakebridge not available")
-        from backend.migration_engine.snowflake_client import get_view_details
-        from backend.migration_engine.lakebridge.service import LakebridgeService
-        d = get_view_details("CUSTOMER_ORDERS", config, lakebridge_service=LakebridgeService())
-        assert d["generated_view_ddl"]
-        assert d["lakebridge"] is not None
-        assert d["lakebridge"]["object_type"] == "view"
-
-    def test_view_fallback_when_disabled(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        from backend.migration_engine.snowflake_client import get_view_details
-        from backend.migration_engine.lakebridge.config import LakebridgeConfig
-        from backend.migration_engine.lakebridge.client import LakebridgeClient
-        from backend.migration_engine.lakebridge.service import LakebridgeService
-        cfg = LakebridgeConfig(enabled=False)
-        svc = LakebridgeService(config=cfg, client=LakebridgeClient(cfg))
-        d = get_view_details("CUSTOMER_ORDERS", config, lakebridge_service=svc)
-        assert d["generated_view_ddl"]
-        assert d["lakebridge"]["lakebridge_used"] is False
-        assert d["lakebridge"]["status"] == "SKIPPED"
-
-
-# ---------- integration: procedure conversion ---------------------------------
-
-@pytest.mark.integration
-class TestProcedureConversion:
-
-    def test_procedure_source_fetched(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        from backend.migration_engine.snowflake_client import get_procedure_details
-        d = get_procedure_details("GET_CUSTOMER_SPENDING", config)
-        assert d["recommendation"]
-
-    def test_procedure_converted_via_lakebridge(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        if not _lakebridge_available():
-            pytest.skip("Lakebridge not available")
-        from backend.migration_engine.snowflake_client import get_procedure_details
-        from backend.migration_engine.lakebridge.service import LakebridgeService
-        d = get_procedure_details("GET_CUSTOMER_SPENDING", config, lakebridge_service=LakebridgeService())
-        assert d["recommendation"]
-        assert d["lakebridge"]["object_type"] == "procedure"
-
-    def test_procedure_fallback_when_disabled(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        from backend.migration_engine.snowflake_client import get_procedure_details
-        from backend.migration_engine.lakebridge.config import LakebridgeConfig
-        from backend.migration_engine.lakebridge.client import LakebridgeClient
-        from backend.migration_engine.lakebridge.service import LakebridgeService
-        cfg = LakebridgeConfig(enabled=False)
-        svc = LakebridgeService(config=cfg, client=LakebridgeClient(cfg))
-        d = get_procedure_details("GET_CUSTOMER_SPENDING", config, lakebridge_service=svc)
-        assert d["recommendation"]
-        assert d["lakebridge"]["lakebridge_used"] is False
-        assert d["lakebridge"]["status"] == "SKIPPED"
-
-
-# ---------- integration: table DDL conversion ---------------------------------
-
-@pytest.mark.integration
-class TestTableDDLConversion:
-
-    def test_existing_behavior_preserved_without_lakebridge(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        from backend.migration_engine.snowflake_client import get_table_details
-        d = get_table_details("CUSTOMERS", config)
-        assert d["table_name"] == "CUSTOMERS"
-        assert d["generated_ddl"]
-        assert d["lakebridge"] is None
-
-    def test_snowflake_ddl_fetched(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        from backend.migration_engine.snowflake_client import get_table_details
-        from backend.migration_engine.lakebridge.config import LakebridgeConfig
-        from backend.migration_engine.lakebridge.client import LakebridgeClient
-        from backend.migration_engine.lakebridge.service import LakebridgeService
-        cfg = LakebridgeConfig(enabled=False)
-        svc = LakebridgeService(config=cfg, client=LakebridgeClient(cfg))
-        d = get_table_details("CUSTOMERS", config, lakebridge_service=svc)
-        assert d["snowflake_ddl"], "snowflake_ddl field must be populated"
-        assert "CUSTOMERS" in d["snowflake_ddl"].upper()
-
-    def test_table_ddl_via_lakebridge(self):
-        config = _gmigrate_test_config()
-        if not _snowflake_reachable(config):
-            pytest.skip("Snowflake not reachable")
-        if not _lakebridge_available():
-            pytest.skip("Lakebridge not available")
-        from backend.migration_engine.snowflake_client import get_table_details
-        from backend.migration_engine.lakebridge.service import LakebridgeService
-        d = get_table_details("CUSTOMERS", config, lakebridge_service=LakebridgeService())
-        assert d["generated_ddl"]
-        assert d["lakebridge"] is not None
-        assert d["lakebridge"]["object_type"] == "table"
 
 
 # ---------- integration: DDL export + assess ----------------------------------

@@ -12,51 +12,6 @@ export interface SnowflakeCredentials {
   snowflake_role?: string;
 }
 
-export type TeradataCredentials = SnowflakeCredentials;
-
-export interface ColumnDetail {
-  name: string;
-  source_type: string;
-  databricks_type: string;
-  nullable: boolean;
-  compatibility: 'HIGH' | 'MEDIUM' | 'LOW';
-}
-
-export interface TableDetails {
-  table_name: string;
-  row_count: number;
-  column_count: number;
-  columns: ColumnDetail[];
-  sample_rows: Record<string, string>[];
-  generated_ddl: string;
-  target_table: string;
-}
-
-export interface ViewDetails {
-  view_name: string;
-  column_count: number;
-  columns: ColumnDetail[];
-  sample_rows: Record<string, string>[];
-  definition: string;
-  generated_view_ddl: string;
-  target_view: string;
-}
-
-export interface ProcedureParameter {
-  name: string;
-  direction: 'IN' | 'OUT' | 'INOUT';
-  source_type: string;
-  databricks_type: string;
-}
-
-export interface ProcedureDetails {
-  procedure_name: string;
-  parameter_count: number;
-  parameters: ProcedureParameter[];
-  source_code: string;
-  recommendation: string;
-}
-
 export interface DiscoveredObjects {
   database: string;
   tables: string[];
@@ -145,6 +100,24 @@ export interface DDLGenerationResult {
   error: string | null;
 }
 
+export interface LakebridgeStatus {
+  enabled: boolean;
+  available: boolean;
+  version?: string | null;
+  reason?: string | null;
+}
+
+export interface LakebridgeAssessment {
+  source_object: string;
+  object_type: string;
+  status: string;
+  lakebridge_used: boolean;
+  warnings: string[];
+  errors: string[];
+  output_location?: string | null;
+  raw: Record<string, unknown>;
+}
+
 export interface ConnectionsStatus {
   snowflake: {
     account: string;
@@ -184,24 +157,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 export const api = {
   // Discovery & Analysis
-  getTables: async (profileId?: string | null, creds?: TeradataCredentials | null): Promise<string[]> => {
-    if (creds && creds.snowflake_user) {
-      const res = await fetch('/api/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(creds),
-      });
-      const data = await handleResponse<{ tables: string[] }>(res);
-      return data.tables || [];
-    } else {
-      const url = profileId ? `/api/tables?profile_id=${encodeURIComponent(profileId)}` : '/api/tables';
-      const res = await fetch(url);
-      const data = await handleResponse<{ tables: string[] }>(res);
-      return data.tables || [];
-    }
-  },
-
-  getObjects: async (profileId?: string | null, creds?: TeradataCredentials | null): Promise<DiscoveredObjects> => {
+  getObjects: async (profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<DiscoveredObjects> => {
     if (creds && creds.snowflake_user) {
       const res = await fetch('/api/objects', {
         method: 'POST',
@@ -216,34 +172,19 @@ export const api = {
     }
   },
 
-  analyzeTable: async (tableName: string, profileId?: string | null, creds?: TeradataCredentials | null): Promise<TableDetails> => {
-    const res = await fetch('/api/analyze/table', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ table_name: tableName, profile_id: profileId || null, creds: creds || null }),
-    });
-    const data = await handleResponse<{ details: TableDetails }>(res);
-    return data.details;
+  getLakebridgeStatus: async (): Promise<LakebridgeStatus> => {
+    const res = await fetch('/api/lakebridge/status');
+    return handleResponse<LakebridgeStatus>(res);
   },
 
-  analyzeView: async (viewName: string, profileId?: string | null, creds?: TeradataCredentials | null): Promise<ViewDetails> => {
-    const res = await fetch('/api/analyze/view', {
+  assessLakebridge: async (profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<LakebridgeAssessment> => {
+    const res = await fetch('/api/lakebridge/assess', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ view_name: viewName, profile_id: profileId || null, creds: creds || null }),
+      body: JSON.stringify({ profile_id: profileId || null, creds: creds || null }),
     });
-    const data = await handleResponse<{ details: ViewDetails }>(res);
-    return data.details;
-  },
-
-  analyzeProcedure: async (procName: string, profileId?: string | null, creds?: TeradataCredentials | null): Promise<ProcedureDetails> => {
-    const res = await fetch('/api/analyze/procedure', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ procedure_name: procName, profile_id: profileId || null, creds: creds || null }),
-    });
-    const data = await handleResponse<{ details: ProcedureDetails }>(res);
-    return data.details;
+    const data = await handleResponse<{ result: LakebridgeAssessment }>(res);
+    return data.result;
   },
 
   // DDL Generation
@@ -252,7 +193,7 @@ export const api = {
     objectNames: string[],
     executeInDatabricks: boolean,
     profileId?: string | null,
-    creds?: TeradataCredentials | null
+    creds?: SnowflakeCredentials | null
   ): Promise<{ results: DDLGenerationResult[] }> => {
     const res = await fetch('/api/generate-ddl', {
       method: 'POST',
@@ -269,7 +210,7 @@ export const api = {
   },
 
   // Migration Execution
-  startMigration: async (selectedTables: string[], profileId?: string | null, creds?: TeradataCredentials | null): Promise<{ message: string; job_id: string }> => {
+  startMigration: async (selectedTables: string[], profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<{ message: string; job_id: string }> => {
     const res = await fetch('/api/migrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -290,7 +231,7 @@ export const api = {
   },
 
   // Validation
-  runValidation: async (tables?: string[], profileId?: string | null, creds?: TeradataCredentials | null): Promise<ValidationReport> => {
+  runValidation: async (tables?: string[], profileId?: string | null, creds?: SnowflakeCredentials | null): Promise<ValidationReport> => {
     const res = await fetch('/api/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -306,7 +247,7 @@ export const api = {
     return handleResponse<ConnectionsStatus>(res);
   },
 
-  testSnowflake: async (creds?: TeradataCredentials | null): Promise<any> => {
+  testSnowflake: async (creds?: SnowflakeCredentials | null): Promise<any> => {
     const res = await fetch('/api/connections/test-snowflake', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -315,7 +256,7 @@ export const api = {
     return handleResponse<any>(res);
   },
 
-  testDatabricks: async (creds?: TeradataCredentials | null): Promise<any> => {
+  testDatabricks: async (creds?: SnowflakeCredentials | null): Promise<any> => {
     const res = await fetch('/api/connections/test-databricks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
