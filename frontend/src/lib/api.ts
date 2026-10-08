@@ -131,6 +131,20 @@ export interface ConnectionProfile {
   created_at?: string;
 }
 
+export interface DDLGenerationResult {
+  object_name: string;
+  object_type: string;
+  snowflake_ddl: string;
+  generated_ddl: string;
+  lakebridge_used: boolean;
+  execution_result: {
+    status: 'SUCCEEDED' | 'FAILED';
+    state: string;
+    error?: string | null;
+  } | null;
+  error: string | null;
+}
+
 export interface ConnectionsStatus {
   snowflake: {
     account: string;
@@ -230,6 +244,28 @@ export const api = {
     });
     const data = await handleResponse<{ details: ProcedureDetails }>(res);
     return data.details;
+  },
+
+  // DDL Generation
+  generateDDL: async (
+    objectType: 'table' | 'view' | 'procedure',
+    objectNames: string[],
+    executeInDatabricks: boolean,
+    profileId?: string | null,
+    creds?: TeradataCredentials | null
+  ): Promise<{ results: DDLGenerationResult[] }> => {
+    const res = await fetch('/api/generate-ddl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        object_type: objectType,
+        object_names: objectNames,
+        execute_in_databricks: executeInDatabricks,
+        profile_id: profileId || null,
+        creds: creds || null,
+      }),
+    });
+    return handleResponse<{ results: DDLGenerationResult[] }>(res);
   },
 
   // Migration Execution

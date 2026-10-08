@@ -105,19 +105,24 @@ class LakebridgeService:
             input_file = input_dir / f"{safe_name or 'source'}.sql"
             input_file.write_text(sql_text or "", encoding="utf-8")
 
-            cmd_result = self.client.run([
-                "transpile",
-                "--source-dialect",
-                self.config.source_dialect,
-                "--input-source",
-                str(input_dir),
-                "--output-folder",
-                str(output_dir),
-                "--skip-validation",
-                "true",
-            ])
+            try:
+                cmd_result = self.client.run([
+                    "transpile",
+                    "--source-dialect",
+                    self.config.source_dialect,
+                    "--input-source",
+                    str(input_dir),
+                    "--output-folder",
+                    str(output_dir),
+                    "--skip-validation",
+                    "true",
+                ], check=False)
+                converted = self._read_first_sql(output_dir)
+            except Exception as ex:
+                converted = None
+                from .models import LakebridgeCommandResult
+                cmd_result = LakebridgeCommandResult(command=[], returncode=1, stdout="", stderr=str(ex))
 
-            converted = self._read_first_sql(output_dir)
             migration_result = MigrationResult(
                 source_object=source_object,
                 object_type=object_type,

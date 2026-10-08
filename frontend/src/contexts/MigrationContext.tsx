@@ -121,7 +121,7 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
     setLoadingTables(true);
     setTableError(null);
     try {
-      const result = await api.getObjects(pid, creds.snowflake_user ? creds : null);
+      const result = await api.getObjects(pid, pid ? null : (creds.snowflake_user ? creds : null));
       setTables(result.tables || []);
       setViews(result.views || []);
       setProcedures(result.procedures || []);

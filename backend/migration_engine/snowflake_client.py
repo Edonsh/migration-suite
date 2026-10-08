@@ -9,8 +9,28 @@ import pyarrow.parquet as pq
 from .config import SNOWFLAKE_CONFIG
 
 def get_snowflake_connection(config=None):
-    """Establishes a connection to Snowflake."""
-    return snowflake.connector.connect(**(config or SNOWFLAKE_CONFIG))
+    """Establishes a connection to Snowflake with sanitized authentication options."""
+    cfg = dict(config or SNOWFLAKE_CONFIG)
+    auth = cfg.get("authenticator")
+    if auth:
+        auth_str = str(auth).strip()
+        # If a JWT token was mistakenly passed as the authenticator
+        if auth_str.startswith("eyJ"):
+            if not cfg.get("token"):
+                cfg["token"] = auth_str
+            cfg["authenticator"] = "oauth"
+        elif auth_str.lower() not in ("snowflake", "oauth", "externalbrowser", "username_password_mfa") and not auth_str.startswith("http"):
+            # Unknown authenticator string: remove it so it doesn't cause 251007 error
+            cfg.pop("authenticator", None)
+
+    # If authenticator is 'oauth' but token is invalid/empty and password exists, fallback to password
+    if cfg.get("password") and cfg.get("authenticator") == "oauth" and (not cfg.get("token") or cfg.get("token") == "your_new_pat_here"):
+        cfg.pop("authenticator", None)
+        cfg.pop("token", None)
+
+    # Filter out None and empty strings
+    clean_cfg = {k: v for k, v in cfg.items() if v is not None and v != ""}
+    return snowflake.connector.connect(**clean_cfg)
 
 def discover_snowflake_tables(config=None):
     """Queries Snowflake metadata to get a list of all tables in the database/schema."""
@@ -46,11 +66,31 @@ def discover_snowflake_all_objects(config=None):
         cursor.execute(f"SHOW TABLES IN SCHEMA {database}.{schema};")
         tables = [row[1] for row in cursor.fetchall()]
 
-        cursor.execute(f"SHOW VIEWS IN SCHEMA {database}.{schema};")
-        views = [row[1] for row in cursor.fetchall()]
+        try:
+            cursor.execute(f"SHOW VIEWS IN SCHEMA {database}.{schema};")
+            views = [row[1] for row in cursor.fetchall()]
+        except Exception:
+            cursor.execute(
+                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS "
+                "WHERE TABLE_CATALOG = %s AND TABLE_SCHEMA = %s ORDER BY TABLE_NAME",
+                (database, schema),
+            )
+            views = [row[0] for row in cursor.fetchall()]
 
-        cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database}.{schema};")
-        procedures = [row[1] for row in cursor.fetchall()]
+        # Use INFORMATION_SCHEMA.PROCEDURES to get ONLY user-defined procedures.
+        # SHOW PROCEDURES returns both user-defined AND Snowflake built-in system
+        # procedures (30+ entries), which is misleading in the UI.
+        try:
+            cursor.execute(
+                "SELECT DISTINCT PROCEDURE_NAME "
+                "FROM INFORMATION_SCHEMA.PROCEDURES "
+                "WHERE PROCEDURE_CATALOG = %s AND PROCEDURE_SCHEMA = %s "
+                "ORDER BY PROCEDURE_NAME",
+                (database, schema),
+            )
+            procedures = [row[0] for row in cursor.fetchall()]
+        except Exception:
+            procedures = []
 
         return {
             "database": database,
@@ -458,21 +498,26 @@ def dump_snowflake_ddls_to_dir(config=None, output_dir: str = None) -> str:
                 pass
 
         # ── Procedures ────────────────────────────────────────────────────────
-        cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database}.{schema};")
-        proc_names = [row[1] for row in cursor.fetchall()]
-        for proc in proc_names:
-            try:
-                cursor.execute(
-                    "SELECT PROCEDURE_DEFINITION FROM INFORMATION_SCHEMA.PROCEDURES "
-                    "WHERE PROCEDURE_CATALOG = %s AND PROCEDURE_SCHEMA = %s AND PROCEDURE_NAME = %s",
-                    (database, schema, proc),
-                )
-                row = cursor.fetchone()
-                if row and row[0]:
-                    (root / f"{proc.lower()}_proc.sql").write_text(row[0], encoding="utf-8")
+        # Query only user-defined procedures (INFORMATION_SCHEMA excludes built-ins)
+        try:
+            cursor.execute(
+                "SELECT DISTINCT PROCEDURE_NAME, PROCEDURE_DEFINITION "
+                "FROM INFORMATION_SCHEMA.PROCEDURES "
+                "WHERE PROCEDURE_CATALOG = %s AND PROCEDURE_SCHEMA = %s "
+                "ORDER BY PROCEDURE_NAME",
+                (database, schema),
+            )
+            proc_rows = cursor.fetchall()
+        except Exception:
+            proc_rows = []
+        for row in proc_rows:
+            proc, definition = row[0], row[1]
+            if definition:
+                try:
+                    (root / f"{proc.lower()}_proc.sql").write_text(definition, encoding="utf-8")
                     exported["procedures"].append(proc)
-            except Exception:
-                pass
+                except Exception:
+                    pass
     finally:
         cursor.close()
         conn.close()

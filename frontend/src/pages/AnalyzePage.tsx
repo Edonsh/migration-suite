@@ -183,10 +183,10 @@ export default function AnalyzePage() {
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center space-x-2">
               <span className="w-6 h-6 rounded bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 font-bold text-xs">
-                TD
+                SF
               </span>
               <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                Teradata Connection:
+                Snowflake Connection:
               </span>
             </div>
 
@@ -374,7 +374,7 @@ export default function AnalyzePage() {
             {loadingTables ? (
               <div className="py-12 text-center text-xs text-slate-500 space-y-2">
                 <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
-                <span>Discovering objects from Teradata...</span>
+                <span>Discovering Snowflake objects...</span>
               </div>
             ) : currentItems().length === 0 ? (
               <div className="py-12 text-center text-xs text-slate-500">
@@ -553,7 +553,7 @@ export default function AnalyzePage() {
                       <thead className="bg-[#0c0e14] text-slate-400 uppercase text-[10px] sticky top-0 border-b border-[#1e2230]">
                         <tr>
                           <th className="p-2.5">Column Name</th>
-                          <th className="p-2.5">Teradata Source Type</th>
+                          <th className="p-2.5">Snowflake Source Type</th>
                           <th className="p-2.5">➔ Databricks Delta Type</th>
                           <th className="p-2.5">Nullable</th>
                           <th className="p-2.5">Conversion Status</th>
@@ -714,7 +714,7 @@ export default function AnalyzePage() {
                       <thead className="bg-[#0c0e14] text-slate-400 uppercase text-[10px] sticky top-0 border-b border-[#1e2230]">
                         <tr>
                           <th className="p-2.5">Output Column</th>
-                          <th className="p-2.5">Teradata Source Type</th>
+                          <th className="p-2.5">Snowflake Source Type</th>
                           <th className="p-2.5">➔ Databricks SQL Type</th>
                           <th className="p-2.5">Nullable</th>
                           <th className="p-2.5">Compatibility</th>
@@ -743,7 +743,7 @@ export default function AnalyzePage() {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <div className="flex justify-between items-center text-xs">
-                        <span className="text-slate-400 font-mono">Teradata Source Definition (`SHOW VIEW`):</span>
+                        <span className="text-slate-400 font-mono">Snowflake Source Definition:</span>
                         <button
                           onClick={() => handleCopy(viewDetails.definition)}
                           className="px-2.5 py-1 bg-[#1f2333] hover:bg-[#252a3a] border border-[#252a3a] rounded text-[11px] text-slate-200"
@@ -801,7 +801,7 @@ export default function AnalyzePage() {
             /* ================================================================ */
             !procDetails ? (
               <div className="py-24 text-center text-slate-500 text-xs">
-                Select a stored procedure on the left to inspect its procedural SPL code and parameter signatures.
+                Select a stored procedure on the left to inspect its source code and parameter signatures.
               </div>
             ) : (
               <>
@@ -816,7 +816,7 @@ export default function AnalyzePage() {
                       </span>
                     </div>
                     <span className="text-[11px] text-slate-400 font-mono">
-                      Database Procedural Logic (SPL)
+                      Snowflake Procedural Logic
                     </span>
                   </div>
 
@@ -827,7 +827,7 @@ export default function AnalyzePage() {
                     </div>
                     <div className="bg-[#0c0e14] px-3 py-1.5 rounded-lg border border-[#252a3a]">
                       <span className="text-slate-500 block text-[10px]">DIALECT</span>
-                      <span className="text-amber-400 font-bold">Teradata SPL</span>
+                      <span className="text-amber-400 font-bold">Snowflake SQL</span>
                     </div>
                   </div>
                 </div>
@@ -838,7 +838,7 @@ export default function AnalyzePage() {
                   <div>
                     <span className="font-semibold block text-amber-100">Stored Procedure Analysis (View-Only):</span>
                     <span>
-                      Stored Procedures execute procedural logic on Teradata. Inspect their signatures and SPL statements below to rewrite or automate them as Databricks SQL Procedures, Python scripts, or PySpark Workflows.
+                      Stored procedures execute procedural logic in Snowflake. Inspect their signatures and source below to rewrite or automate them as Databricks SQL procedures, Python scripts, or PySpark workflows.
                     </span>
                   </div>
                 </div>
@@ -853,7 +853,7 @@ export default function AnalyzePage() {
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    SPL Source Code
+                    Source Code
                   </button>
                   <button
                     onClick={() => setActiveProcTab('params')}
@@ -881,7 +881,7 @@ export default function AnalyzePage() {
                 {activeProcTab === 'code' && (
                   <div className="space-y-2">
                     <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-400 font-mono">Teradata SPL Source (`SHOW PROCEDURE`):</span>
+                      <span className="text-slate-400 font-mono">Snowflake Procedure Source:</span>
                       <button
                         onClick={() => handleCopy(procDetails.source_code)}
                         className="px-2.5 py-1 bg-[#1f2333] hover:bg-[#252a3a] border border-[#252a3a] rounded text-[11px] text-slate-200"
@@ -905,7 +905,7 @@ export default function AnalyzePage() {
                           <tr>
                             <th className="p-2.5">Parameter Name</th>
                             <th className="p-2.5">Mode</th>
-                            <th className="p-2.5">Teradata Data Type</th>
+                            <th className="p-2.5">Snowflake Data Type</th>
                             <th className="p-2.5">Databricks SQL Type</th>
                           </tr>
                         </thead>
@@ -952,14 +952,14 @@ export default function AnalyzePage() {
         </div>
       </div>
 
-      {/* Inline Modal: Add Teradata Connection Profile */}
+      {/* Inline Modal: Add Snowflake Connection Profile */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-[#12151f] border border-[#252a3a] rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-[#1e2230]">
               <div className="flex items-center space-x-2">
-                <span className="text-orange-400 font-bold text-sm">TD</span>
-                <h3 className="text-base font-bold text-white">Add Teradata Profile</h3>
+                <span className="text-orange-400 font-bold text-sm">SF</span>
+                <h3 className="text-base font-bold text-white">Add Snowflake Profile</h3>
               </div>
               <button
                 onClick={() => setIsAddModalOpen(false)}
@@ -982,7 +982,7 @@ export default function AnalyzePage() {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Teradata Trial DB"
+                  placeholder="e.g. Snowflake Test DB"
                   value={newConnData.name}
                   onChange={(e) => setNewConnData({ ...newConnData, name: e.target.value })}
                   className="w-full bg-[#0c0e14] border border-[#252a3a] rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
@@ -991,12 +991,12 @@ export default function AnalyzePage() {
 
               <div>
                 <label className="block text-[11px] uppercase tracking-wider text-slate-400 mb-1">
-                  Host *
+                  Account *
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. gmigrate-8cyv823...teradata.com"
+                  placeholder="e.g. xy12345.us-east-1"
                   value={newConnData.snowflake_account}
                   onChange={(e) => setNewConnData({ ...newConnData, snowflake_account: e.target.value })}
                   className="w-full bg-[#0c0e14] border border-[#252a3a] rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
@@ -1010,7 +1010,7 @@ export default function AnalyzePage() {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. demo_user"
+                  placeholder="e.g. GMIGRATE_TEST"
                   value={newConnData.snowflake_database}
                   onChange={(e) => setNewConnData({ ...newConnData, snowflake_database: e.target.value })}
                   className="w-full bg-[#0c0e14] border border-[#252a3a] rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
@@ -1033,19 +1033,31 @@ export default function AnalyzePage() {
                 </div>
                 <div>
                   <label className="block text-[11px] uppercase tracking-wider text-slate-400 mb-1">
-                    Logmech
+                    Schema *
                   </label>
-                  <select
+                  <input
+                    type="text"
+                    required
+                    placeholder="TEST_SCHEMA"
                     value={newConnData.snowflake_schema}
                     onChange={(e) => setNewConnData({ ...newConnData, snowflake_schema: e.target.value })}
                     className="w-full bg-[#0c0e14] border border-[#252a3a] rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
-                  >
-                    <option value="TD2">TD2</option>
-                    <option value="LDAP">LDAP</option>
-                    <option value="KRB5">KRB5</option>
-                    <option value="TDNEGO">TDNEGO</option>
-                  </select>
+                  />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-slate-400 mb-1">
+                  Warehouse *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="COMPUTE_WH"
+                  value={newConnData.snowflake_warehouse}
+                  onChange={(e) => setNewConnData({ ...newConnData, snowflake_warehouse: e.target.value })}
+                  className="w-full bg-[#0c0e14] border border-[#252a3a] rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                />
               </div>
 
               <div>

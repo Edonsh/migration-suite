@@ -73,6 +73,8 @@ SNOWFLAKE_CONFIG = {
     "database": get_env_or_secret("SNOWFLAKE_DATABASE", DATABRICKS_SECRET_SCOPE),
     "schema": get_env_or_secret("SNOWFLAKE_SCHEMA", DATABRICKS_SECRET_SCOPE),
     "role": get_env_or_secret("SNOWFLAKE_ROLE", DATABRICKS_SECRET_SCOPE),
+    "authenticator": get_env_or_secret("SNOWFLAKE_AUTHENTICATOR", DATABRICKS_SECRET_SCOPE),
+    "token": get_env_or_secret("SNOWFLAKE_TOKEN", DATABRICKS_SECRET_SCOPE),
 }
 
 LAKEBRIDGE_ENABLED = os.environ.get("LAKEBRIDGE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
@@ -101,12 +103,13 @@ def validate_teradata_env_vars():
 def validate_snowflake_env_vars():
     required_keys = [
         ("SNOWFLAKE_USER", SNOWFLAKE_CONFIG["user"]),
-        ("SNOWFLAKE_PASSWORD", SNOWFLAKE_CONFIG["password"]),
         ("SNOWFLAKE_ACCOUNT", SNOWFLAKE_CONFIG["account"]),
         ("SNOWFLAKE_WAREHOUSE", SNOWFLAKE_CONFIG["warehouse"]),
         ("SNOWFLAKE_DATABASE", SNOWFLAKE_CONFIG["database"]),
         ("SNOWFLAKE_SCHEMA", SNOWFLAKE_CONFIG["schema"]),
     ]
+    if not SNOWFLAKE_CONFIG["password"] and not SNOWFLAKE_CONFIG["token"]:
+        required_keys.append(("SNOWFLAKE_PASSWORD or SNOWFLAKE_TOKEN", None))
     missing = [key for key, val in required_keys if not val]
     if missing:
         raise ValueError(f"Missing Snowflake app environment variables: {', '.join(missing)}")

@@ -95,6 +95,10 @@ class AnalyzeTableRequest(BaseModel):
     creds: Optional[CredentialsRequest] = None
     profile_id: Optional[str] = None
 
+class ObjectDiscoveryRequest(BaseModel):
+    creds: Optional[CredentialsRequest] = None
+    profile_id: Optional[str] = None
+
 class AnalyzeViewRequest(BaseModel):
     view_name: str
     creds: Optional[CredentialsRequest] = None
@@ -124,29 +128,42 @@ class LakebridgeAssessRequest(BaseModel):
     creds: Optional[CredentialsRequest] = None
 
 
+class GenerateDDLRequest(BaseModel):
+    """Request body for generating and optionally applying DDL in Databricks."""
+    object_type: str  # 'table' | 'view' | 'procedure'
+    object_names: List[str]  # list of Snowflake object names to generate DDL for
+    execute_in_databricks: bool = False  # if True, run the DDL against the Databricks warehouse
+    profile_id: Optional[str] = None
+    creds: Optional[CredentialsRequest] = None
+
+
 def resolve_snowflake_config(creds: Optional[CredentialsRequest] = None, profile_id: Optional[str] = None) -> Dict[str, Any]:
     """Resolves Snowflake configuration from explicit credentials, a saved profile, or backend/.env."""
-    if creds and creds.snowflake_user:
-        return build_snowflake_config(creds)
     if profile_id:
         p = get_profile_by_id(profile_id)
         if p and p.get("snowflake_user"):
             return {
                 "user": p["snowflake_user"],
-                "password": p["snowflake_password"],
+                "password": p.get("snowflake_password") or "",
                 "account": p["snowflake_account"],
                 "warehouse": p["snowflake_warehouse"],
                 "database": p["snowflake_database"],
                 "schema": p["snowflake_schema"],
                 "role": p.get("snowflake_role") or None,
             }
+
+    if creds and creds.snowflake_user:
+        pwd = getattr(creds, "snowflake_password", None)
+        if pwd and pwd != "********":
+            return build_snowflake_config(creds)
+
     # Fallback to first saved profile in connection store
     profiles = load_saved_profiles()
     active = next((p for p in profiles if p.get("snowflake_user")), None)
     if active:
         return {
             "user": active["snowflake_user"],
-            "password": active["snowflake_password"],
+            "password": active.get("snowflake_password") or "",
             "account": active["snowflake_account"],
             "warehouse": active["snowflake_warehouse"],
             "database": active["snowflake_database"],
@@ -154,7 +171,7 @@ def resolve_snowflake_config(creds: Optional[CredentialsRequest] = None, profile
             "role": active.get("snowflake_role") or None,
         }
 
-    return build_snowflake_config()
+    return build_snowflake_config(creds)
 
 # ─── In-Memory State ──────────────────────────────────────────────────────────
 
@@ -420,7 +437,7 @@ async def get_all_objects(profile_id: Optional[str] = None):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/objects")
-async def post_all_objects(req: Optional[AnalyzeTableRequest] = None):
+async def post_all_objects(req: Optional[ObjectDiscoveryRequest] = None):
     try:
         config = resolve_snowflake_config(creds=req.creds if req else None, profile_id=req.profile_id if req else None)
         return discover_snowflake_all_objects(config)
@@ -453,6 +470,156 @@ async def api_analyze_procedure(req: AnalyzeProcedureRequest):
         return {"status": "success", "details": details}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# ─── DDL Generation via Lakebridge ───────────────────────────────────────────
+
+@app.post("/api/generate-ddl")
+async def api_generate_ddl(req: GenerateDDLRequest):
+    """Generates Databricks DDL for the selected Snowflake objects using Lakebridge.
+
+    For each requested object:
+      1. Fetches the original Snowflake DDL (GET_DDL or INFORMATION_SCHEMA).
+      2. Passes it through the Lakebridge transpiler (Snowflake → Databricks).
+      3. Falls back to a built-in mapping stub if Lakebridge is unavailable.
+      4. Optionally executes the generated DDL against the configured Databricks warehouse.
+    """
+    try:
+        sf_config = resolve_snowflake_config(creds=req.creds, profile_id=req.profile_id)
+        database = sf_config.get("database")
+        schema = sf_config.get("schema")
+        svc = LakebridgeService()
+
+        results = []
+        for obj_name in req.object_names:
+            full_name = f"{database}.{schema}.{obj_name}"
+            snowflake_ddl = ""
+            generated_ddl = ""
+            execution_result = None
+            error = None
+
+            # 1. Fetch source DDL from Snowflake
+            try:
+                from .migration_engine.snowflake_client import get_snowflake_connection
+                conn = get_snowflake_connection(sf_config)
+                cursor = conn.cursor()
+                try:
+                    if req.object_type == "table":
+                        cursor.execute(f"SELECT GET_DDL('TABLE', '{full_name}')")
+                        row = cursor.fetchone()
+                        snowflake_ddl = row[0] if row else ""
+                    elif req.object_type == "view":
+                        cursor.execute(f"SELECT GET_DDL('VIEW', '{full_name}')")
+                        row = cursor.fetchone()
+                        snowflake_ddl = row[0] if row else ""
+                    elif req.object_type == "procedure":
+                        try:
+                            cursor.execute(
+                                "SELECT ARGUMENT_SIGNATURE, DATA_TYPE, PROCEDURE_DEFINITION "
+                                "FROM INFORMATION_SCHEMA.PROCEDURES "
+                                "WHERE UPPER(PROCEDURE_CATALOG) = UPPER(%s) AND UPPER(PROCEDURE_SCHEMA) = UPPER(%s) AND UPPER(PROCEDURE_NAME) = UPPER(%s)",
+                                (database, schema, obj_name),
+                            )
+                            p_row = cursor.fetchone()
+                            if p_row:
+                                sig = p_row[0] or ""
+                                ret_type = p_row[1] or ""
+                                body = p_row[2] or ""
+                                inner = sig.strip("()")
+                                types = []
+                                for part in inner.split(","):
+                                    tokens = part.strip().split()
+                                    if tokens:
+                                        types.append(tokens[-1])
+                                sig_types = f"({', '.join(types)})" if types else "()"
+                                try:
+                                    cursor.execute(f"SELECT GET_DDL('PROCEDURE', '{database}.{schema}.{obj_name}{sig_types}')")
+                                    ddl_row = cursor.fetchone()
+                                    snowflake_ddl = ddl_row[0] if ddl_row else ""
+                                except Exception:
+                                    snowflake_ddl = f"CREATE OR REPLACE PROCEDURE {obj_name}{sig}\nRETURNS {ret_type}\nLANGUAGE SQL\nAS $$\n{body}\n$$;"
+                            else:
+                                snowflake_ddl = ""
+                        except Exception as pe:
+                            error = f"Failed to get procedure definition: {pe}"
+                finally:
+                    cursor.close()
+                    conn.close()
+            except Exception as e:
+                error = f"Failed to fetch Snowflake DDL: {e}"
+
+            # 2. Convert with Lakebridge (or fall back)
+            lakebridge_used = False
+            if snowflake_ddl:
+                try:
+                    conversion = svc.convert_sql_text(snowflake_ddl, obj_name, req.object_type)
+                    if conversion and conversion.target_definition:
+                        generated_ddl = conversion.target_definition
+                        lakebridge_used = conversion.lakebridge_used
+                except Exception as ex:
+                    # Transient LSP or transpile warning
+                    pass
+
+                if not generated_ddl:
+                    # Clean Databricks SQL fallback if Lakebridge is unavailable
+                    if req.object_type == "table":
+                        # Adapt common Snowflake types to Databricks
+                        clean_sql = snowflake_ddl
+                        clean_sql = re.sub(r"TIMESTAMP_NTZ\(\d+\)", "TIMESTAMP_NTZ", clean_sql, flags=re.IGNORECASE)
+                        clean_sql = re.sub(r"NUMBER\(38,\s*0\)", "BIGINT", clean_sql, flags=re.IGNORECASE)
+                        clean_sql = re.sub(r"NUMBER\((\d+),\s*(\d+)\)", r"DECIMAL(\1, \2)", clean_sql, flags=re.IGNORECASE)
+                        generated_ddl = clean_sql
+                    elif req.object_type == "view":
+                        generated_ddl = snowflake_ddl
+                    elif req.object_type == "procedure":
+                        generated_ddl = (
+                            f"/* Snowflake Procedure: {obj_name} */\n"
+                            f"-- Review and execute as Databricks SQL script or Python task:\n"
+                            f"{snowflake_ddl}"
+                        )
+            else:
+                generated_ddl = f"-- Could not retrieve DDL for {obj_name} from Snowflake."
+
+            # 3. Optionally execute in Databricks
+            if req.execute_in_databricks and generated_ddl and not generated_ddl.startswith("-- Could"):
+                try:
+                    from databricks.sdk import WorkspaceClient
+                    from .migration_engine.config import DATABRICKS_WAREHOUSE_ID
+                    from .migration_engine.databricks_client import (
+                        execute_sql,
+                        ensure_unity_catalog_hierarchy,
+                        determine_target_catalog_and_schema,
+                    )
+                    w = WorkspaceClient()
+                    ensure_unity_catalog_hierarchy(w, DATABRICKS_WAREHOUSE_ID, database, schema)
+                    target_catalog, target_schema = determine_target_catalog_and_schema(database, schema)
+                    execute_sql(w, DATABRICKS_WAREHOUSE_ID, f"USE CATALOG {target_catalog};")
+                    execute_sql(w, DATABRICKS_WAREHOUSE_ID, f"USE SCHEMA {target_schema};")
+                    exec_res = execute_sql(w, DATABRICKS_WAREHOUSE_ID, generated_ddl)
+                    state = exec_res.status.state.value if exec_res.status and exec_res.status.state else "UNKNOWN"
+                    execution_result = {
+                        "status": "SUCCEEDED" if state not in ("FAILED", "CANCELED") else "FAILED",
+                        "state": state,
+                        "error": exec_res.status.error.message if (exec_res.status and exec_res.status.error) else None,
+                        "target_catalog": target_catalog,
+                        "target_schema": target_schema,
+                    }
+                except Exception as ex:
+                    execution_result = {"status": "FAILED", "state": "ERROR", "error": str(ex)}
+
+            results.append({
+                "object_name": obj_name,
+                "object_type": req.object_type,
+                "snowflake_ddl": snowflake_ddl,
+                "generated_ddl": generated_ddl,
+                "lakebridge_used": lakebridge_used,
+                "execution_result": execution_result,
+                "error": error,
+            })
+
+        return {"status": "success", "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 # ─── Migration Execution ──────────────────────────────────────────────────────
 
